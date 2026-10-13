@@ -6,7 +6,7 @@ The four patches and nscd build switches remove specific parsing and native-code
 
 ## Background
 
-Reviewed base: glibc `34106fee698c83eb0af71d4d0381e66b399be746`, with Wolfi's three patches applied first. The selected design still has five mechanisms. The revised policy changes 15 source files, adding 70 and removing 65 lines. Public environment APIs and kernel `AT_SECURE` semantics remain intact.
+Reviewed base: glibc `34106fee698c83eb0af71d4d0381e66b399be746`, with Wolfi's three patches applied first. The selected design still has five mechanisms. The revised policy changes 18 source files, adding 80 and removing 71 lines. Public environment APIs and kernel `AT_SECURE` semantics remain intact.
 
 ## Goals
 
@@ -33,17 +33,24 @@ Reviewed base: glibc `34106fee698c83eb0af71d4d0381e66b399be746`, with Wolfi's th
 
 Compared the sanitizer tail byte-for-byte against the pinned unmodified function, allowing only that real-getter spelling and the changed eager-binding invariant (`dl_lazy != 0` instead of `!= 1`). Kernel secure-mode setup, the insecure-variable list and the startup check protecting file descriptors 0/1/2 are unchanged. Static startup retains its separate dangerous-variable removal loop. No global forcing or clearing of `__libc_enable_secure` is introduced.
 
+**`wordexp` child sanitation:** its real `IFS` presence check is retained with `(getenv) ("IFS")`, solely to decide whether to remove that variable before shell execution. Ignoring this check would skip existing sanitation. Parsing still uses the fixed default separators; this exemption does not enable environment tuning. Native syscall tracing proves explicit application spawning can forward IFS, whereas wordexp removes it while forwarding an ordinary application variable. The probe detects the regression before the correction and covers dynamic/static callers afterward.
+
 **Corrected fallbacks in patch 1:**
 
 - Ignoring restricted `PATH` previously selected `CS_PATH` (`/bin:/usr/bin`). Bare-name execution now fails with `ENOENT`; explicit paths still work. This avoids bypassing Werewolf's narrow command wrappers. Applications must supply explicit executable paths.
 - Ignoring `POSIXLY_CORRECT` previously restored GNU argument permutation and caret bracket-negation behavior. Fixed defaults now stop options at the first operand and use strict bracket semantics; portable `[!a]` negation remains. Explicit argument-parser modes remain application requests.
 - Ignoring private `TMPDIR` previously made `tempnam` fall back to a shared directory. Its environment-selected directory search now fails if no valid explicit directory is supplied. Prefer atomic creation with an explicit private template. `tmpfile` and `mkstemp` retain their existing creation safeguards.
+- Ignoring `GMON_OUT_PREFIX` previously fell back to writing `gmon.out` in the current directory. Disable the common profiling writer; retain `_mcleanup`'s sampling stop, buffer freeing and state reset. Actual stock/pre-correction Wolfi package controls demonstrate the private-prefix versus current-directory behavior; corrected dynamic/static probes require neither output.
 - Ignoring `LD_BIND_NOW` previously left the loader's lazy-binding default. Dynamic and static-linked loader initialization now select eager binding, including ordinary `RTLD_LAZY` requests. The secure-mode invariant requires that hardened default; relaxing the invariant is not used as a workaround.
 - Discarding a tunable policy must not leave executable-stack permission negotiable. Compile `glibc.rtld.execstack` with default 0; existing checks reject requesting main programs/dependencies before application code runs. Environment/cache requests cannot restore modes 1 or 2. [Upstream semantics](https://sourceware.org/glibc/manual/latest/html_node/Dynamic-Linking-Tunables.html).
 
 **Loader rejection cleanup:** the DSO audit-tag gate uses the established `lose` label before the point where local failure handling stops being valid. That path closes the descriptor, unmaps segments and frees the partially constructed object before reporting an error. It does not pretend loading succeeded or leave a partially initialized handle. Mapping and dynamic-header inspection happen before this gate; it is a denial of activation, not a promise that no file mapping ever occurs.
 
+**`ldd` inspection:** upstream avoids executing the inspected application through `LD_TRACE_LOADED_OBJECTS`. Denying that variable without adapting the tool can run application code. Patch 2 now uses the loader's explicit `--list` mode and refuses optional modes requiring disabled controls. A regression fixture first proves its constructor/main marker works, then requires listing and refusal to leave it absent. The native Linux probe passes; package-level coverage uses the shipped script and loader.
+
 **NSS state:** external modules cannot reach a successful loading branch in this build. Built-in branches return before the denial. Multiple external requests publish the same failed state under the established lock; builtin function tables and pointer mangling are not replaced. The existing loaded-state shortcut is not a new external loading route; it cannot prevent arbitrary corruption of process memory.
+
+The required NSS configuration package replaces only `/etc/nsswitch.conf` from `wolfi-baselayout`, selecting built-in files/DNS services. Wolfi's account defaults use `compat`, which the patch denies. Ordinary account probes use the installed configuration without forcing a test provider.
 
 **Converters:** `__gconv_load_cache` has no remaining configuration-init caller in the inspected runtime call graph and is hidden. Its cache pointer remains NULL. The built-in graph is initialized through the original once/lock path. Returning NULL from `__gconv_find_shlib` reaches existing error/cleanup handling; no fabricated function pointer or successful conversion result is introduced.
 
@@ -69,6 +76,8 @@ Normal dependencies, explicit loading and trusted-code reuse remain. IPE must re
 
 Regression probes check real privileged dynamic/static execution, public getters versus secure getters, dangerous-variable removal, C locale and post-startup mutation, implicit versus explicit execution, strict parsing/pattern defaults, temporary-directory failure, eager resolution of an unresolved lazy DSO, and dynamic/static executable-stack refusal. Existing injection, builtin NSS/conversion, thread and unwinding probes remain.
 
-The revised source passes focused probes on native aarch64 and emulated x86_64, including real privileged dynamic/static execution on aarch64. These local builds use GCC 13; they do not replace native Wolfi/GCC 16 validation. Strict patch application and recipe/provenance checks pass.
+Focused probes pass on native aarch64 and emulated x86_64, including real privileged dynamic/static execution on aarch64. The native Wolfi/GCC 16 build also passes its compiler check and focused probes through the ldd/NSS corrections. The final IFS/profiling corrections also pass native Wolfi/GCC 16 focused checks in r13, along with GCC 13 dynamic/static syscall tracing. Strict patch application and recipe/provenance checks pass.
 
-The original native Alpine/Melange build passed Wolfi's compiler check and special-test gate and reported 100% public ABI compatibility, but runtime results contained 902 FAIL and 5,585 PASS. Those results precede the review fixes and do not satisfy the package's 2% failure threshold. No failures have been reclassified or waived. Revised native Wolfi builds, individual upstream failure review, form/IPE tests and performance gates remain release blockers.
+Native fixture corrections restored 568 tests: candidate r12 reports 6,236 PASS and 349 FAIL, versus 6,487 PASS and 54 FAIL in the matched stock build. The then-unchanged 2% installed-package gate correctly rejected its 5.21% ratio. Final r13 records 6,240 PASS / 345 FAIL in the suite summary and 5.15% across installed result files; the current requested downstream ceiling is 5.5%. No failures have been reclassified or waived. The final IFS/profiling build passed native focused hardening checks and the unchanged ABI gate (99.96% binary / 99.98% source before inherited rounding); see the [r13 inventory](../audit/native-r13.md). Native x86_64 and remaining installed-package checks still govern publication; individual failure review, form/IPE tests and service performance checks govern production adoption.
+
+The ABI checker reports 99.96% binary and 99.98% source compatibility for r12; the inherited HTML gate displays a rounded 100.0%. Its warnings concern missing stpcpy parameter metadata and a hidden setlocale alias return type. Source signatures remain unchanged and focused public calls validate copying and returned locale pointers. Retain the report; the rounding is not proof of exact ABI identity.

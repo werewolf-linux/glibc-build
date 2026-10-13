@@ -1,7 +1,7 @@
 SPDX-License-Identifier: LGPL-2.1-or-later
 Subject: [PATCH 4/4] Retain built-in converters without external configuration or DSOs
 Upstream-Status: Inappropriate [fixed Werewolf appliance policy]
-Reference: glibc-vuln-audit.md; docs/design/glibc-neutered.md
+Reference: docs/glibc-vuln-audit.md; docs/design/glibc-neutered.md
 Base-Commit: 34106fee698c83eb0af71d4d0381e66b399be746
 
 diff --git a/iconv/gconv_conf.c b/iconv/gconv_conf.c

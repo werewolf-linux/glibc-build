@@ -15,11 +15,14 @@ class Derivation(unittest.TestCase):
     def test_future_upstream_flag_survives(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            upstream = yaml.safe_load((ROOT/'upstream.yaml').read_text())
+            (root/'build/inputs').mkdir(parents=True)
+            upstream = yaml.safe_load((ROOT/'build/inputs/upstream.yaml').read_text())
             configure = next(x for x in upstream['pipeline'] if x.get('name') == 'Configure glibc')
             configure['runs'] += '\n# Added by a future Wolfi update: --enable-future-protection\n'
-            (root/'upstream.yaml').write_text(yaml.safe_dump(upstream))
-            shutil.copyfile(ROOT/'upstream.lock.json', root/'upstream.lock.json')
+            (root/'build/inputs/upstream.yaml').write_text(yaml.safe_dump(upstream))
+            shutil.copyfile(ROOT/'build/inputs/upstream.lock.json', root/'build/inputs/upstream.lock.json')
+            shutil.copyfile(ROOT/'policy.json', root/'policy.json')
+            shutil.copytree(ROOT/'profile', root/'profile')
             with patch.object(derive, 'ROOT', root):
                 result = derive.derive()
             self.assertIn('--enable-future-protection', next(x['runs'] for x in result['pipeline'] if x.get('name') == 'Configure glibc'))
@@ -27,10 +30,12 @@ class Derivation(unittest.TestCase):
     def test_source_pin_mismatch_is_rejected(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            shutil.copyfile(ROOT/'upstream.yaml', root/'upstream.yaml')
-            lock = json.loads((ROOT/'upstream.lock.json').read_text())
+            (root/'build/inputs').mkdir(parents=True)
+            shutil.copyfile(ROOT/'build/inputs/upstream.yaml', root/'build/inputs/upstream.yaml')
+            lock = json.loads((ROOT/'build/inputs/upstream.lock.json').read_text())
             lock['glibc_commit'] = '0'*40
-            (root/'upstream.lock.json').write_text(json.dumps(lock))
+            (root/'build/inputs/upstream.lock.json').write_text(json.dumps(lock))
+            shutil.copyfile(ROOT/'policy.json', root/'policy.json')
             with patch.object(derive, 'ROOT', root), self.assertRaises(AssertionError):
                 derive.derive()
 
@@ -48,11 +53,20 @@ class Derivation(unittest.TestCase):
         dev = next(x for x in result['subpackages'] if x['name'] == '${{package.name}}-dev')
         deps = dev['dependencies']
         self.assertIn('${{package.name}}=${{package.full-version}}', deps['runtime'])
-        self.assertIn('glibc-2.44-dev=${{package.full-version}}', deps['provides'])
-        self.assertIn('glibc-2.44-dev', deps['replaces'])
+        self.assertIn('glibc-'+str(result['package']['version'])+'-dev=${{package.full-version}}', deps['provides'])
+        self.assertIn('glibc-'+str(result['package']['version'])+'-dev', deps['replaces'])
         loader = next(x for x in result['subpackages'] if x['name'].startswith('ld-linux-neutered-'))
         self.assertIn('${{package.name}}=${{package.full-version}}', loader['dependencies']['runtime'])
         self.assertIn('ld-linux-neutered-${{package.version}}=${{package.full-version}}', result['package']['dependencies']['runtime'])
+
+    def test_builtin_nss_configuration_is_a_required_owned_package(self):
+        result = derive.derive()
+        self.assertIn('${{package.name}}-nss-config=${{package.full-version}}', result['package']['dependencies']['runtime'])
+        profile = next(x for x in result['subpackages'] if x['name'] == '${{package.name}}-nss-config')
+        self.assertEqual(['wolfi-baselayout'], profile['dependencies']['replaces'])
+        self.assertIn('${{package.name}}=${{package.full-version}}', profile['dependencies']['runtime'])
+        for line in (ROOT/'profile/nsswitch.conf').read_text().splitlines():
+            self.assertLessEqual(set(line.split(':', 1)[1].split()), {'files', 'dns'})
 
 if __name__ == '__main__':
     unittest.main()

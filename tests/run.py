@@ -17,6 +17,7 @@ def main():
     parser.add_argument('--baseline-loader', type=Path, help='unpatched loader with a matching ABI, for substitution controls')
     parser.add_argument('--report', type=Path, help='record compiler and ELF hardening evidence')
     parser.add_argument('--secure', action='store_true', help='also test actual setuid transitions; requires real root, no emulator')
+    parser.add_argument('--trace-spawn', action='store_true', help='verify child IFS sanitation with native strace')
     args = parser.parse_args()
     build = args.build.resolve()
     loader = build / 'elf/ld.so'
@@ -58,7 +59,7 @@ def main():
                  '-Wl,--dynamic-linker='+str(loader)]
         def compile(extra, output, filename='policy.c'):
             startup = []
-            libraries = [str(loader)]
+            libraries = [str(build/'libc_nonshared.a'), str(loader)]
             linkflags = list(flags)
             if '-static' in extra:
                 linkflags = [x for x in linkflags if not x.startswith('-Wl,--dynamic-linker=')]
@@ -71,7 +72,7 @@ def main():
         dso = work / 'inject.so'
         compile(['-shared', '-fPIC'], dso, 'inject.c')
         (work/'gconv-modules').write_text('module INTERNAL NEUTERED-PROBE// inject 1\n')
-        def run(command, changes=None, success=True):
+        def run(command, changes=None, success=True, cwd=None):
             target_env = dict(env, **(changes or {}))
             prefix = list(runner)
             if runner:
@@ -80,7 +81,7 @@ def main():
                     if key.startswith('LD_') or key == 'GLIBC_TUNABLES':
                         prefix += ['-E', key+'='+target_env.pop(key)]
             result = subprocess.run(prefix + [str(x) for x in command], env=target_env,
-                                    capture_output=True, text=True, timeout=30)
+                                    capture_output=True, text=True, timeout=30, cwd=cwd)
             assert (result.returncode == 0) == success, (command, result.returncode, result.stdout, result.stderr)
             return result
         # Control: explicit loading really executes the test constructor.
@@ -175,6 +176,30 @@ def main():
         compile(['-static', '-pthread', '-ldl'], static)
         run([static], controls)
         assert run([static, 'command-path']).stdout == 'implicit command lookup denied\n'
+        # Denying a private profiling path must not write into the current directory.
+        for extra, label in [([], 'dynamic'), (['-static'], 'static')]:
+            profile = work/('profile-'+label)
+            compile(extra+['-pg', '-pthread', '-Wl,--enable-new-dtags'], profile, 'benchmark.c')
+            prefix = work/'profile-output'
+            if args.baseline_loader and not extra:
+                run([args.baseline_loader, '--library-path', args.baseline_loader.resolve().parent, profile, 'startup'],
+                    {'GMON_OUT_PREFIX': str(prefix)}, cwd=work)
+                outputs = list(work.glob('profile-output.*'))
+                assert outputs, 'baseline profiling control did not produce output'
+                for output in outputs:
+                    output.unlink()
+            run([profile, 'startup'], {'GMON_OUT_PREFIX': str(prefix)}, cwd=work)
+            assert not list(work.glob('profile-output.*')) and not (work/'gmon.out').exists()
+        if args.trace_spawn:
+            assert not runner, 'child-environment tracing requires native execution'
+            for executable in [binary, static]:
+                for mode in ['spawn-ifs', 'wordexp-ifs']:
+                    trace = work/'spawn.trace'
+                    run(['strace', '-f', '-v', '-s', '65536', '-e', 'trace=execve', '-o', trace, executable, mode])
+                    child = [line for line in trace.read_text().splitlines() if 'execve("/bin/sh",' in line]
+                    assert len(child) == 1, 'expected one shell execve'
+                    assert 'NEUTERED_CHILD_ENV=forwarded' in child[0], 'application environment was lost'
+                    assert ('IFS=NEUTERED_IFS_PROBE' in child[0]) == (mode == 'spawn-ifs'), 'IFS sanitation mismatch'
         # Default library paths/RPATH can see this DSO; external NSS must not.
         nss = work / 'libnss_neutered_probe.so.2'
         nss.write_bytes(dso.read_bytes())

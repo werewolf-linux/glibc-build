@@ -11,14 +11,18 @@
 #include <pwd.h>
 #include <pthread.h>
 #include <resolv.h>
+#include <spawn.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/auxv.h>
+#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
+#include <wordexp.h>
 
 extern int __nss_configure_lookup(const char *, const char *);
+extern char **environ;
 
 static void *thread(void *value)
 {
@@ -32,6 +36,24 @@ static void *thread(void *value)
 
 int main(int argc, char **argv)
 {
+    if (argc == 2 && (strcmp(argv[1], "spawn-ifs") == 0 || strcmp(argv[1], "wordexp-ifs") == 0)) {
+        assert(setenv("IFS", "NEUTERED_IFS_PROBE", 1) == 0);
+        assert(setenv("NEUTERED_CHILD_ENV", "forwarded", 1) == 0);
+        if (strcmp(argv[1], "spawn-ifs") == 0) {
+            char *command[] = {"sh", "-c", "exit 0", NULL};
+            pid_t child;
+            int status;
+            assert(posix_spawn(&child, "/bin/sh", NULL, NULL, command, environ) == 0);
+            assert(waitpid(child, &status, 0) == child);
+            assert(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+        } else {
+            wordexp_t words;
+            assert(wordexp("$(printf marker)", &words, 0) == 0);
+            assert(words.we_wordc == 1 && strcmp(words.we_wordv[0], "marker") == 0);
+            wordfree(&words);
+        }
+        return 0;
+    }
     if (argc == 2 && strcmp(argv[1], "command-path") == 0) {
         char *command[] = {"true", NULL};
         assert(setenv("PATH", "/nonexistent/narrow", 1) == 0);
@@ -82,6 +104,11 @@ int main(int argc, char **argv)
     assert(getenv("NEUTERED_PUBLIC") != NULL);
     assert(strcmp(getenv("NEUTERED_PUBLIC"), "application-value") == 0);
     assert(secure_getenv("NEUTERED_PUBLIC") != NULL);
+    /* Exercise the public calling convention flagged by ABI dump tooling. */
+    char copied[16];
+    char *(*volatile copy)(char *, const char *) = stpcpy;
+    assert(copy(copied, "hello") == copied + 5);
+    assert(strcmp(copied, "hello") == 0);
     assert(setenv("NEUTERED_MUTATION", "later", 1) == 0);
     assert(strcmp(getenv("NEUTERED_MUTATION"), "later") == 0);
     assert(putenv("NEUTERED_PUTENV=works") == 0);
@@ -136,9 +163,9 @@ int main(int argc, char **argv)
     }
     assert(setenv("GCONV_PATH", converters, 1) == 0);
     assert(iconv_open("NEUTERED-PROBE", "UTF-8") == (iconv_t)-1);
-    /* Build sandboxes need not list their effective uid in passwd. */
-    assert(__nss_configure_lookup("passwd", "files") == 0);
+    /* Exercise the image's real configuration, not a forced provider. */
     assert(getpwnam("root") != NULL);
+    assert(getpwuid(0) != NULL);
     struct addrinfo *addresses;
     assert(getaddrinfo("127.0.0.1", NULL, NULL, &addresses) == 0);
     freeaddrinfo(addresses);

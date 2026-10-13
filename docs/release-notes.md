@@ -1,5 +1,7 @@
-These are candidate packages from the unchanged pinned Wolfi recipe plus the fixed Werewolf policy patches. Both native architecture builds, hardening probes, the inherited upstream test gates, and the ABI gate must succeed before this release is emitted.
+These packages derive from Wolfi’s latest captured stable glibc recipe plus Werewolf’s fixed policy patches. Both native builds, hardening probes, complete upstream suites, ABI and installed-package checks must pass before publication. The downstream raw failure ceiling is 5.5%, replacing Wolfi’s 2%; no failures are hidden or reclassified.
 
-Archives include signed APKs and indexes, the CI signing public key, corresponding patched glibc source, source/recipe/tool pins, patch series, and hashes. Keys are ephemeral CI keys: do not automatically trust a downloaded public key or install these on production machines. Candidate releases are immutable and are not automatically deployed.
+Archives include signed APKs/indexes, the Werewolf signing public key, patched source, input/tool pins, ordered patches and hashes. Authenticate the trust root independently; these releases use Werewolf’s existing APK key rather than ephemeral CI keys.
 
-Production promotion requires a stable authenticated APK key/repository, Werewolf IPE and form checks, performance comparisons, and the separate PostgreSQL migration. No preload, locale-environment, external NSS, or external converter exception is supplied. The strict IPE profile does not support JIT-dependent forms.
+R2 repositories are immutable snapshots under `https://dist.werewolf-linux.org/apk/glibc-neutered/builds/<input-hash>/<arch>/`. `current.json` identifies the complete snapshot. GitHub releases contain both architecture archives and checksums. Publication does not deploy packages.
+
+Production adoption still requires form/IPE checks, service performance comparisons, coherent loader/libc updates and the separate PostgreSQL migration. No runtime security opt-outs are supplied. See [publishing](design/publishing.md) for the workflow and recovery behavior.

@@ -3,16 +3,21 @@
 import argparse
 import fcntl
 import hashlib
+import functools
+import http.server
 import json
 import os
 from pathlib import Path
 import platform
 import shutil
 import subprocess
+import threading
+import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--arch', default=platform.machine())
+parser.add_argument('--test-only', action='store_true', help='rerun package checks against existing signed APKs')
 args = parser.parse_args()
 arch = {'arm64': 'aarch64', 'aarch64': 'aarch64', 'x86_64': 'x86_64'}[args.arch]
 os.chdir(ROOT)
@@ -70,17 +75,41 @@ with (scratch/'lock').open('w') as lock:
         base.unlink()
     packages = ROOT/'build/packages'
     packages.mkdir(parents=True, exist_ok=True)
-    (packages/'runner.json').write_text(json.dumps(manifest, indent=2)+'\n')
-    subprocess.run([melange, 'build', 'build/glibc.yaml', '--runner', runner,
-        '--source-dir', 'build/context', '--arch', arch, '--cpu', env.get('MELANGE_CPU', '4'),
-        '--memory', env.get('MELANGE_MEMORY', '8Gi'), '--namespace', 'werewolf',
-        '--pipeline-dir', 'pipelines', '--repository-append', 'https://packages.wolfi.dev/os',
-        '--keyring-append', 'wolfi-signing.rsa.pub', '--signing-key', 'build/keys/package.rsa',
-        '--cache-dir', str(scratch/'cache'), '--out-dir', str(packages)], check=True, env=env)
+    provenance = 'test-runner.json' if args.test_only else 'runner.json'
+    (packages/provenance).write_text(json.dumps(manifest, indent=2)+'\n')
+    if not args.test_only:
+        subprocess.run([melange, 'build', 'build/glibc.yaml', '--runner', runner,
+            '--source-dir', 'build/context', '--arch', arch, '--cpu', env.get('MELANGE_CPU', '4'),
+            '--memory', env.get('MELANGE_MEMORY', '8Gi'), '--namespace', 'werewolf',
+            '--pipeline-dir', 'build/inputs/pipelines', '--repository-append', 'https://packages.wolfi.dev/os',
+            '--keyring-append', 'build/inputs/wolfi-signing.rsa.pub', '--signing-key', 'build/keys/werewolf-packages.rsa',
+            '--cache-dir', str(scratch/'cache'), '--out-dir', str(packages)], check=True, env=env)
     # Build pipelines and package test pipelines are separate Melange commands.
-    subprocess.run([melange, 'test', 'build/glibc.yaml', '--runner', runner,
-        '--source-dir', 'build/context', '--arch', arch, '--cpu', env.get('MELANGE_CPU', '4'),
-        '--memory', env.get('MELANGE_MEMORY', '8Gi'), '--pipeline-dirs', 'pipelines',
-        '--repository-append', str(packages), '--repository-append', 'https://packages.wolfi.dev/os',
-        '--keyring-append', 'build/keys/package.rsa.pub', '--keyring-append', 'wolfi-signing.rsa.pub'],
-        check=True, env=env)
+    # Package tests are self-contained. Empty input avoids a QEMU bootstrap
+    # copying files with find's implicit execvp("cp") before tests can run.
+    test_context = ROOT/'build/test-context'
+    test_context.mkdir(exist_ok=True)
+    # Fresh-root apk checks need the signed local index inside the runner.
+    # QEMU reaches the host loopback through its user-network gateway.
+    handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=str(packages))
+    with http.server.ThreadingHTTPServer(('127.0.0.1', 0), handler) as server:
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        port = server.server_address[1]
+        host_repository = f'http://127.0.0.1:{port}'
+        guest_host = '10.0.2.2' if runner == 'qemu' else '127.0.0.1'
+        test_config = yaml.safe_load((ROOT/'build/glibc.yaml').read_text())
+        test_config['vars']['neutered-test-repository'] = f'http://{guest_host}:{port}'
+        recipe = ROOT/'build/glibc-test.yaml'
+        recipe.write_text(yaml.safe_dump(test_config, sort_keys=False))
+        try:
+            subprocess.run([melange, 'test', str(recipe), '--runner', runner,
+                '--source-dir', str(test_context), '--arch', arch, '--cpu', env.get('MELANGE_CPU', '4'),
+                '--memory', env.get('MELANGE_MEMORY', '8Gi'), '--pipeline-dirs', 'build/inputs/pipelines',
+                '--test-package-append', 'busybox', '--test-package-append', 'apk-tools',
+                '--repository-append', host_repository, '--repository-append', 'https://packages.wolfi.dev/os',
+                '--keyring-append', 'build/keys/werewolf-packages.rsa.pub', '--keyring-append', 'build/inputs/wolfi-signing.rsa.pub'],
+                check=True, env=env)
+        finally:
+            server.shutdown()
+            thread.join()

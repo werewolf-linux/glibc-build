@@ -3,8 +3,14 @@ ARCH ?= $(shell uname -m)
 MELANGE ?= $(if $(wildcard build/tools/melange),$(abspath build/tools/melange),melange)
 export MELANGE
 
-.PHONY: verify derive prepare build check
-verify:
+.PHONY: refresh verify derive prepare build check
+refresh:
+	$(PYTHON) scripts/refresh.py $(if $(WOLFI),--wolfi $(WOLFI))
+
+build/inputs/upstream.lock.json:
+	$(PYTHON) scripts/refresh.py $(if $(WOLFI),--wolfi $(WOLFI))
+
+verify: build/inputs/upstream.lock.json
 	$(PYTHON) scripts/verify.py
 
 derive: verify

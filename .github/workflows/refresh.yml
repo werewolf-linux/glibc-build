@@ -1,49 +1,91 @@
-name: refresh Wolfi
+name: publish latest Wolfi glibc
 on:
   schedule:
-    - cron: '23 5 * * *'
+    - cron: '7-57/10 * * * *'
   workflow_dispatch:
+  push:
+    branches: [main]
 permissions:
   contents: read
 concurrency:
-  group: refresh-wolfi
+  group: publish-latest-wolfi
   cancel-in-progress: false
 jobs:
-  refresh:
+  discover:
     runs-on: ubuntu-24.04
+    # GitHub requires push access to discover recoverable draft releases.
     permissions:
       contents: write
-      pull-requests: write
     outputs:
-      changed: ${{ steps.update.outputs.changed }}
+      state: ${{ steps.check.outputs.state }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - run: |
           python3 -m venv build/venv
           build/venv/bin/pip install -r requirements.txt
-      - id: update
+          build/venv/bin/python scripts/refresh.py
+          make PYTHON=build/venv/bin/python check
+      - id: check
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          build/venv/bin/python scripts/refresh.py
-          build/venv/bin/python scripts/verify.py
-          if git diff --quiet -- upstream.yaml upstream upstream.lock.json pipelines wolfi-signing.rsa.pub; then
-            echo 'changed=false' >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          git switch -C refresh-wolfi
-          git config user.name github-actions
-          git config user.email github-actions@users.noreply.github.com
-          git add upstream.yaml upstream upstream.lock.json pipelines wolfi-signing.rsa.pub
-          git commit -m 'upstream: refresh pinned Wolfi glibc inputs'
-          git push --force-with-lease origin refresh-wolfi
-          if ! gh pr list --head refresh-wolfi --state open --json number --jq '.[].number' | grep -q .; then
-            gh pr create --head refresh-wolfi --title 'upstream: refresh Wolfi glibc' --body 'Refresh the unchanged official recipe and supporting files. Native package builds, hardening probes, upstream tests, and ABI checks must pass before merge. Patch drift requires an explicit patch refresh; no fuzzy application or automatic merge.'
-          fi
-          echo 'changed=true' >> "$GITHUB_OUTPUT"
-  validate:
-    needs: refresh
-    if: needs.refresh.outputs.changed == 'true'
+        run: build/venv/bin/python scripts/publish.py status
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: steps.check.outputs.state != 'complete'
+        with:
+          name: wolfi-inputs
+          path: build/inputs/
+          include-hidden-files: true
+          if-no-files-found: error
+  build:
+    needs: discover
+    if: needs.discover.outputs.state == 'build'
     uses: ./.github/workflows/build.yml
     with:
-      source_ref: refresh-wolfi
+      inputs_artifact: wolfi-inputs
+      production: true
+    secrets: inherit
+  publish:
+    needs: [discover, build]
+    if: >-
+      always() && !cancelled() && needs.discover.result == 'success' &&
+      (needs.build.result == 'success' || needs.discover.outputs.state == 'publish')
+    runs-on: ubuntu-24.04
+    environment: release
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: |
+          python3 -m venv build/venv
+          build/venv/bin/pip install -r requirements.txt
+          sudo apt-get update
+          sudo apt-get install -y awscli openssl
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: wolfi-inputs
+          path: build/inputs
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        if: needs.build.result == 'success'
+        with:
+          pattern: glibc-neutered-*
+          path: artifacts
+      - name: Stage a recoverable draft from both successful builds
+        if: needs.build.result == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: build/venv/bin/python scripts/publish.py stage
+      - name: Publish signed APK repositories and complete GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_EC2_METADATA_DISABLED: 'true'
+        run: |
+          test -n "$AWS_ACCESS_KEY_ID"
+          test -n "$AWS_SECRET_ACCESS_KEY"
+          build/venv/bin/python scripts/publish.py publish
