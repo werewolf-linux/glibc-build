@@ -53,3 +53,10 @@ dkms.conf
 
 # debug information files
 *.dwo
+
+# Generated build context, packages and signing material.
+/build/
+/.keys/
+__pycache__/
+*.pyc
+*.rsa

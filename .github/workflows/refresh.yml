@@ -1,0 +1,49 @@
+name: refresh Wolfi
+on:
+  schedule:
+    - cron: '23 5 * * *'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: refresh-wolfi
+  cancel-in-progress: false
+jobs:
+  refresh:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      pull-requests: write
+    outputs:
+      changed: ${{ steps.update.outputs.changed }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: |
+          python3 -m venv build/venv
+          build/venv/bin/pip install -r requirements.txt
+      - id: update
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          build/venv/bin/python scripts/refresh.py
+          build/venv/bin/python scripts/verify.py
+          if git diff --quiet -- upstream.yaml upstream upstream.lock.json pipelines wolfi-signing.rsa.pub; then
+            echo 'changed=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git switch -C refresh-wolfi
+          git config user.name github-actions
+          git config user.email github-actions@users.noreply.github.com
+          git add upstream.yaml upstream upstream.lock.json pipelines wolfi-signing.rsa.pub
+          git commit -m 'upstream: refresh pinned Wolfi glibc inputs'
+          git push --force-with-lease origin refresh-wolfi
+          if ! gh pr list --head refresh-wolfi --state open --json number --jq '.[].number' | grep -q .; then
+            gh pr create --head refresh-wolfi --title 'upstream: refresh Wolfi glibc' --body 'Refresh the unchanged official recipe and supporting files. Native package builds, hardening probes, upstream tests, and ABI checks must pass before merge. Patch drift requires an explicit patch refresh; no fuzzy application or automatic merge.'
+          fi
+          echo 'changed=true' >> "$GITHUB_OUTPUT"
+  validate:
+    needs: refresh
+    if: needs.refresh.outputs.changed == 'true'
+    uses: ./.github/workflows/build.yml
+    with:
+      source_ref: refresh-wolfi

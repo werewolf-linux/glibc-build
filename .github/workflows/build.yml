@@ -1,0 +1,62 @@
+name: build
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      source_ref:
+        type: string
+        default: ''
+permissions:
+  contents: read
+concurrency:
+  group: build-${{ inputs.source_ref || github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.source_ref || github.sha }}
+          persist-credentials: false
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap python3-venv git make openssl
+          python3 -m venv build/venv
+          build/venv/bin/pip install -r requirements.txt
+          sudo python3 scripts/install-melange.py
+      - name: Verify provenance and derivation
+        run: make PYTHON=build/venv/bin/python check derive
+      - name: Check patch application at the locked source
+        run: make PYTHON=build/venv/bin/python prepare
+      - name: Build and test signed packages
+        run: sudo make PYTHON=build/venv/bin/python ARCH=${{ matrix.arch }} build
+      - name: Package provenance
+        if: success()
+        run: |
+          cp upstream.lock.json tools.lock.json build/packages/
+          cp build/keys/package.rsa.pub build/packages/
+          cp -R patches build/packages/
+          cp build/glibc.yaml build/packages/
+          tar -czf build/packages/glibc-source.tar.gz --exclude=.git -C build/source .
+          (cd build/packages && find . -type f -exec sha256sum '{}' +) > build/SHA256SUMS
+          cp build/SHA256SUMS build/packages/
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: glibc-neutered-${{ matrix.arch }}
+          path: build/packages/
+          if-no-files-found: warn
