@@ -109,7 +109,7 @@ def validate(directory, arch, lock, source_sha=None):
     if (directory / 'werewolf-packages.rsa.pub').read_bytes() != key.read_bytes():
         raise ValueError('Ephemeral signing key cannot be published')
     upstream = json.loads((directory / 'upstream.lock.json').read_text())
-    if any(upstream[k] != lock[k] for k in ['build_id', 'sha256', 'policy_sha256']):
+    if any(upstream[k] != lock[k] for k in ['build_id', 'sha256', 'mode', 'policy_sha256']):
         raise ValueError('Upstream provenance mismatch')
     config = derive()
     if yaml.safe_load((directory / 'glibc.yaml').read_text()) != config:

@@ -42,7 +42,8 @@ class LatestInputs(unittest.TestCase):
 
     def test_unrelated_commit_does_not_rebuild_but_source_and_policy_do(self):
         lock = {'recipe': 'example.yaml', 'glibc_commit': '1'*40, 'revision': 6,
-                'sha256': {'upstream.yaml': '2'*64}, 'policy_sha256': {'patch': '3'*64},
+                'sha256': {'upstream.yaml': '2'*64}, 'mode': {'upstream.yaml': 0o644},
+                'policy_sha256': {'patch': '3'*64},
                 'wolfi_commit': '4'*40}
         first = inputs.identity(lock)
         lock['wolfi_commit'] = '5'*40

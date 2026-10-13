@@ -40,7 +40,12 @@ jobs:
         if: inputs.inputs_artifact != ''
         with:
           name: ${{ inputs.inputs_artifact }}
-          path: build/inputs
+          path: build/input-bundle
+      - name: Restore captured inputs with their file modes
+        if: inputs.inputs_artifact != ''
+        run: |
+          mkdir -p build/inputs
+          tar -xzf build/input-bundle/wolfi-inputs.tar.gz -C build/inputs
       - name: Capture latest Wolfi inputs for standalone validation
         if: inputs.inputs_artifact == ''
         run: build/venv/bin/python scripts/refresh.py

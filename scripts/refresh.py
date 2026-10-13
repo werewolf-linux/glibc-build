@@ -8,7 +8,7 @@ import shutil
 import subprocess
 import tempfile
 import yaml
-from inputs import ROOT, INPUTS, identity, policy_hashes, sha256
+from inputs import ROOT, INPUTS, identity, policy_hashes, sha256, file_modes
 
 def latest(checkout):
     candidates = []
@@ -54,6 +54,7 @@ def capture(checkout, destination=INPUTS):
                 'version': str(config['package']['version']), 'epoch': config['package']['epoch'],
                 'revision': revision,
                 'sha256': {str(p.relative_to(candidate)): sha256(p) for p in sorted(candidate.rglob('*')) if p.is_file()},
+                'mode': file_modes(candidate),
                 'policy_sha256': policy_hashes()}
         lock['build_id'] = identity(lock)
         (candidate / 'upstream.lock.json').write_text(json.dumps(lock, indent=2) + '\n')
