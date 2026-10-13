@@ -1,7 +1,7 @@
 SPDX-License-Identifier: LGPL-2.1-or-later
 Subject: [PATCH 3/4] Retain only built-in files and DNS NSS providers
 Upstream-Status: Inappropriate [fixed Werewolf appliance policy]
-Reference: glibc-vuln-audit.md; docs/design/glibc-neutered.md
+Reference: docs/glibc-vuln-audit.md; docs/design/glibc-neutered.md
 Base-Commit: 34106fee698c83eb0af71d4d0381e66b399be746
 
 diff --git a/nss/nss_module.c b/nss/nss_module.c

@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 import subprocess
 
-target = Path('build/keys/package.rsa')
+target = Path('build/keys/werewolf-packages.rsa')
 target.parent.mkdir(parents=True, exist_ok=True)
 value = os.environ.pop('GLIBC_APK_SIGNING_KEY', '')
 if value:
@@ -20,3 +20,6 @@ else:
     subprocess.run([os.environ.get('MELANGE', 'melange'), 'keygen', str(target)], check=True)
     target.chmod(0o600)
     print('Ephemeral CI signing key; artifacts require explicit trust and are not production releases')
+
+if value:
+    assert Path(str(target)+'.pub').read_bytes() == Path('release/packages.pub').read_bytes(), 'Signing key does not match Werewolf APK trust root'

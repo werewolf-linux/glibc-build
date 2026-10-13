@@ -1,19 +1,17 @@
 name: build
 on:
-  push:
-    branches: [main]
   pull_request:
   workflow_dispatch:
   workflow_call:
     inputs:
-      source_ref:
+      inputs_artifact:
         type: string
         default: ''
+      production:
+        type: boolean
+        default: false
 permissions:
   contents: read
-concurrency:
-  group: build-${{ inputs.source_ref || github.ref }}
-  cancel-in-progress: true
 jobs:
   build:
     strategy:
@@ -25,11 +23,11 @@ jobs:
           - arch: aarch64
             runner: ubuntu-24.04-arm
     runs-on: ${{ matrix.runner }}
+    environment: ${{ inputs.production && 'release' || 'ci' }}
     timeout-minutes: 180
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.source_ref || github.sha }}
           persist-credentials: false
       - name: Install build tools
         run: |
@@ -38,25 +36,45 @@ jobs:
           python3 -m venv build/venv
           build/venv/bin/pip install -r requirements.txt
           sudo python3 scripts/install-melange.py
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        if: inputs.inputs_artifact != ''
+        with:
+          name: ${{ inputs.inputs_artifact }}
+          path: build/inputs
+      - name: Capture latest Wolfi inputs for standalone validation
+        if: inputs.inputs_artifact == ''
+        run: build/venv/bin/python scripts/refresh.py
       - name: Verify provenance and derivation
         run: make PYTHON=build/venv/bin/python check derive
       - name: Check patch application at the locked source
         run: make PYTHON=build/venv/bin/python prepare
-      - name: Build and test signed packages
-        run: sudo make PYTHON=build/venv/bin/python ARCH=${{ matrix.arch }} build
-      - name: Package provenance
-        if: success()
+      - name: Write production signing key
+        if: inputs.production
+        env:
+          GLIBC_APK_SIGNING_KEY: ${{ secrets.WEREWOLF_PACKAGES_KEY }}
         run: |
-          cp upstream.lock.json tools.lock.json build/packages/
-          cp build/keys/package.rsa.pub build/packages/
-          cp -R patches build/packages/
-          cp build/glibc.yaml build/packages/
-          tar -czf build/packages/glibc-source.tar.gz --exclude=.git -C build/source .
-          (cd build/packages && find . -type f -exec sha256sum '{}' +) > build/SHA256SUMS
-          cp build/SHA256SUMS build/packages/
+          test -n "$GLIBC_APK_SIGNING_KEY"
+          build/venv/bin/python scripts/signing-key.py
+      - name: Build and test signed packages
+        run: |
+          set -o pipefail
+          sudo make PYTHON=build/venv/bin/python ARCH=${{ matrix.arch }} build 2>&1 | tee build/build.log
+      - name: Record successful native validation
+        run: |
+          sudo chown -R "$USER" build/packages
+          build/venv/bin/python scripts/provenance.py --arch ${{ matrix.arch }}
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
           name: glibc-neutered-${{ matrix.arch }}
           path: build/packages/
+          if-no-files-found: warn
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: validation-${{ matrix.arch }}
+          path: |
+            build/build.log
+            build/inputs/upstream.lock.json
+            build/glibc.yaml
           if-no-files-found: warn

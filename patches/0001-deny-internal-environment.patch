@@ -1,7 +1,7 @@
 SPDX-License-Identifier: LGPL-2.1-or-later
 Subject: [PATCH 1/4] Deny implicit environment configuration; preserve public APIs
 Upstream-Status: Inappropriate [fixed Werewolf appliance policy]
-Reference: glibc-vuln-audit.md; docs/design/glibc-neutered.md
+Reference: docs/glibc-vuln-audit.md; docs/design/glibc-neutered.md
 Base-Commit: 34106fee698c83eb0af71d4d0381e66b399be746
 
 diff --git a/elf/dl-support.c b/elf/dl-support.c
@@ -241,4 +241,31 @@ index 46a10fa4..645afd10 100644
 +#define GLIBC_ENV_API 1
  #include <stdlib.h>
  #include <unistd.h>
+ 
+diff --git a/posix/wordexp.c b/posix/wordexp.c
+index 9a49e102..13646d01 100644
+--- a/posix/wordexp.c
++++ b/posix/wordexp.c
+@@ -856,7 +856,7 @@ exec_comm_child (char *comm, int *fildes, bool showerr, bool noexec)
+   struct strlist newenv;
+   strlist_init (&newenv);
+ 
+-  bool recreate_env = getenv ("IFS") != NULL;
++  bool recreate_env = (getenv) ("IFS") != NULL;
+   if (recreate_env)
+     {
+       for (char **ep = __environ; *ep != NULL; ep++)
+diff --git a/gmon/gmon.c b/gmon/gmon.c
+index 996b6a62..3260dd0c 100644
+--- a/gmon/gmon.c
++++ b/gmon/gmon.c
+@@ -375,6 +375,9 @@ write_bb_counts (int fd)
+ static void
+ write_gmon (void)
+ {
++    /* No implicit profiling output, including current-directory fallback.  */
++    return;
++
+     int fd = -1;
+     char *env;
  

@@ -22,15 +22,15 @@ The [FreeBSD Porter's Handbook](https://docs.freebsd.org/en/books/porters-handbo
 
 `patches/series` lists four source patches. The fifth protection, nscd removal, uses existing build switches. Headers identify the intended change, inspected base, upstream applicability and audit/design references. Keep allocator/string/math implementations out of these patches.
 
-`scripts/refresh.py` copies the tracked Wolfi release stream's recipe and supporting directory as a complete unit and regenerates provenance hashes. It increments the downstream revision when inputs change. Unchanged inputs do not create updates. Major release-stream changes are explicit migrations.
+`scripts/refresh.py` captures the newest primary stable Wolfi glibc recipe and its complete supporting files under `build/inputs/`. Numeric version discovery follows new release streams automatically; strict patch application and input validation stop incompatible updates. Build identities change when relevant upstream or downstream inputs change.
 
 `scripts/prepare.py` fetches the exact locked glibc commit into a new directory, applies Wolfi patches first, and runs `git apply --check` before each policy patch. Context mismatches stop preparation. It never resets a developer checkout or substitutes a newer source commit. Unchanged-context offsets are acceptable; fuzzy context matching is not.
 
-On patch drift, prepare an unmodified new source, apply the old series one patch at a time, and manually revise only the failing mechanism. Compare the final diff and behavior with the previous validated release; update each patch's base/reference as appropriate. Retain explanatory context rather than generating zero-context patches. Increment `upstream.lock.json`'s revision for policy/packaging changes before releasing new package bytes under an existing upstream version.
+On patch drift, prepare an unmodified new source, apply the old series one patch at a time, and manually revise only the failing mechanism. Compare the final diff and behavior with the previous validated release; update each patch's base/reference as appropriate. Retain explanatory context rather than generating zero-context patches. Increment `policy.json`'s revision for policy/packaging changes before releasing new package bytes under an existing upstream version.
 
-`scripts/derive.py` holds the package naming, added flags, application gates, and omitted facilities. It must preserve compiler environment and existing upstream hardening, tests, and ABI checks. `scripts/verify.py` checks these invariants and input hashes before any package build.
+`scripts/derive.py` holds the package naming, added flags, application gates, and omitted facilities. It preserves compiler environment, upstream hardening, full tests and ABI checks. The sole failure-count override is the requested raw 5.5% ceiling. `scripts/verify.py` checks these invariants and input hashes before any package build.
 
-Test binaries use upstream's hardcoded test interpreter/RPATH option. Build utilities use the installed build-host libc. Neither gets a policy bypass; the shipped loader rejects the same overrides under test. Record failures individually with their output and a verified policy reason before accepting them as expected.
+Test binaries use upstream's hardcoded test interpreter/RPATH option. Build utilities use the installed build-host libc. Neither gets a policy bypass; the shipped loader rejects the same overrides under test. Retain every failure and its output; the ratio gate does not reclassify failures.
 
 ## Drawbacks
 

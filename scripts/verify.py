@@ -10,14 +10,15 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
 from derive import derive
+from inputs import verify, INPUTS
 
 def main():
-    lock = json.loads((ROOT / 'upstream.lock.json').read_text())
+    lock = verify()
     assert re.fullmatch('[0-9a-f]{40}', lock['wolfi_commit'])
     assert re.fullmatch('[0-9a-f]{40}', lock['glibc_commit'])
     for name, digest in lock['sha256'].items():
-        assert hashlib.sha256((ROOT/name).read_bytes()).hexdigest() == digest, name
-    upstream = yaml.safe_load((ROOT/'upstream.yaml').read_text())
+        assert hashlib.sha256((INPUTS/name).read_bytes()).hexdigest() == digest, name
+    upstream = yaml.safe_load((INPUTS/'upstream.yaml').read_text())
     derived = derive()
     configure = lambda c: next(x['runs'] for x in c['pipeline'] if x.get('name') == 'Configure glibc')
     flags = lambda s: set(re.findall(r'--[a-zA-Z0-9_-]+(?:=[^\s\\]+)?', s))
@@ -35,6 +36,15 @@ def main():
     assert original_patch == next(x for x in derived['pipeline'] if x.get('uses') == 'patch')
     for name in ['Run the glibc testsuite', 'Generate public ABI report', 'Check libc public ABI against the previous report']:
         assert next(x for x in upstream['pipeline'] if x.get('name') == name) == next(x for x in derived['pipeline'] if x.get('name') == name), name
+    policy = json.loads((ROOT/'policy.json').read_text())
+    assert 0 <= policy['max_fail_per_mille'] <= 55
+    gate_name = 'Verify PASS/FAIL ratio in test result files is within acceptable threshold'
+    def gate(config):
+        sub = next(x for x in config['subpackages'] if x['name'] == '${{package.name}}-testresults')
+        return next(x['runs'] for x in sub['test']['pipeline'] if x.get('name') == gate_name)
+    ceiling = format(policy['max_fail_per_mille'] / 1000, '.3f')
+    assert gate(derived).replace('MAX_FAIL_RATIO='+ceiling, 'MAX_FAIL_RATIO=0.02').replace(
+        '-exec /usr/bin/grep ', '-exec grep ') == gate(upstream), 'raw test counting/gate changed'
     series = (ROOT/'patches/series').read_text().splitlines()
     assert len(series) == len(set(series)) == 4
     assert set(series) == {p.name for p in (ROOT/'patches').glob('*.patch')}
