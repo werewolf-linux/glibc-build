@@ -25,6 +25,8 @@ A maintained version pin delays security updates and duplicates Wolfi's release 
 
 `refresh.yml` runs at minutes 7, 17, 27, 37, 47 and 57, on main pushes and manually. GitHub schedules are best effort. One concurrency group serializes discovery, both builds and publication; redundant pending checks can be replaced.
 
+All jobs use explicitly selected Ubuntu 26.04 GitHub runners; native builds use `ubuntu-26.04` for x86_64 and `ubuntu-26.04-arm` for aarch64. Melange supplies the Wolfi build environment and compiler toolchain.
+
 Discovery checks the GitHub runner's preinstalled AWS CLI and OpenSSL before starting native builds. Publication uses those same runner-provided tools; it does not depend on an Ubuntu `awscli` package.
 
 `refresh.py` clones Wolfi and selects the highest numeric stable version that provides the primary glibc virtual. It requires the latest recipe's exact source pin; invalid new inputs stop rather than falling back. It captures the unchanged recipe, complete supporting directory, pipelines and signing public key under `build/inputs/`.
