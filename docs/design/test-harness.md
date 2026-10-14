@@ -31,6 +31,7 @@ Failures include intentionally removed features, missing environment-selected fi
 | Wolfi NSS `compat` | Install the same required files/DNS configuration used by the candidate packages | External NSS remains denied; ordinary account probes do not force providers. |
 | `find -exec` bare commands | Use an absolute grep path for result counting | Counting/assertions remain; the current requested downstream ceiling is 5.5%. |
 | Melange QEMU source copying | Empty input directory for self-contained package tests | Avoid bootstrap `execvp("cp")`; no command-lookup exception. |
+| Ubuntu 26.04 AppArmor child capability denial | Private CI bubblewrap profile allows child `sys_chroot` | Preserve APK fresh-root bootstrap checks and the system bubblewrap profile; preflight both before building. |
 | apk assumes GNU argument permutation | Test-only adapter uses supported `apk_info`, `apk_add`, `apk_del`, `apk_version` and `apk_update` applet names | Options precede operands; verify an older version compares as `<` before trusting gates. |
 | Local APK repository in fresh roots | Temporary loopback HTTP server; QEMU uses its host gateway | Signed APKs/index remain authenticated. No production service, signing bypass or external bind. |
 
