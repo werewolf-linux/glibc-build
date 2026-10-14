@@ -55,6 +55,89 @@ class LatestInputs(unittest.TestCase):
         self.assertNotEqual(first, inputs.identity(lock))
 
 class ReleaseGate(unittest.TestCase):
+    def test_draft_lookup_uses_paginated_listing_and_preserves_api_errors(self):
+        draft = {'tag_name': 'build-example', 'draft': True, 'assets': []}
+        response = subprocess.CompletedProcess([], 0, json.dumps([[{'tag_name': 'unrelated'}], [draft]]), '')
+        with patch.dict(os.environ, {'GITHUB_REPOSITORY': 'example/repo'}):
+            with patch.object(subprocess, 'run', return_value=response) as api:
+                self.assertEqual(draft, publish.release('build-example'))
+                command = api.call_args.args[0]
+                self.assertIn('--paginate', command)
+                self.assertIn('repos/example/repo/releases?per_page=100', command)
+            response.stdout = '[]'
+            with patch.object(subprocess, 'run', return_value=response):
+                self.assertIsNone(publish.release('build-example'))
+            response.returncode, response.stderr = 1, 'HTTP 404: repository unavailable'
+            with patch.object(subprocess, 'run', return_value=response), self.assertRaises(RuntimeError):
+                publish.release('build-example')
+
+    def test_release_archive_bytes_survive_changed_extraction_metadata(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            packages = root / 'packages'
+            packages.mkdir()
+            (packages / 'example.apk').write_bytes(b'signed package')
+            first, second = root / 'first.tar.gz', root / 'second.tar.gz'
+            publish.archive(packages, first)
+            os.utime(packages / 'example.apk', (42, 42))
+            os.utime(packages, (43, 43))
+            publish.archive(packages, second)
+            self.assertEqual(first.read_bytes(), second.read_bytes())
+            with tarfile.open(first) as archive:
+                self.assertEqual(b'signed package', archive.extractfile('./example.apk').read())
+
+    def test_partial_staging_resumes_without_a_second_create_or_overwrite(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            artifacts, assets = root / 'artifacts', root / 'assets'
+            for arch in publish.ARCHES:
+                packages = artifacts / ('glibc-neutered-' + arch)
+                packages.mkdir(parents=True)
+                (packages / 'example.apk').write_bytes(arch.encode())
+            current = None
+            uploaded, calls = {}, []
+            fail = True
+            def run(*args):
+                nonlocal current, fail
+                calls.append(args)
+                if args[:3] == ('gh', 'api', '--method'):
+                    request = json.loads(Path(args[-1]).read_text())
+                    self.assertTrue(request['draft'])
+                    self.assertEqual('false', request['make_latest'])
+                    current = {'draft': True, 'assets': []}
+                    return json.dumps(current)
+                if args[:3] == ('gh', 'release', 'upload'):
+                    path = Path(args[-1])
+                    if path.name == 'glibc-neutered-aarch64.tar.gz' and fail:
+                        fail = False
+                        raise RuntimeError('transient upload failure')
+                    uploaded[path.name] = path.read_bytes()
+                    current['assets'].append({'name': path.name})
+                elif args[:3] == ('gh', 'release', 'download'):
+                    name = args[args.index('--pattern') + 1]
+                    (Path(args[-1]) / name).write_bytes(uploaded[name])
+                return ''
+            environment = {'GITHUB_REPOSITORY': 'example/repo', 'GITHUB_SHA': '1' * 40,
+                           'GITHUB_RUN_NUMBER': '1'}
+            with patch.dict(os.environ, environment), \
+                 patch.object(publish, 'validate', return_value={'version': '2.44-r16'}), \
+                 patch.object(publish, 'release', side_effect=lambda tag: current), \
+                 patch.object(publish, 'run', side_effect=run):
+                with self.assertRaisesRegex(RuntimeError, 'transient upload'):
+                    publish.stage(artifacts, assets, {'build_id': 'example'}, 'build-example')
+                self.assertNotIn('release.json', uploaded)
+                original = uploaded['glibc-neutered-x86_64.tar.gz']
+                os.utime(artifacts / 'glibc-neutered-x86_64' / 'example.apk', (99, 99))
+                publish.stage(artifacts, assets, {'build_id': 'example'}, 'build-example')
+                self.assertEqual(original, uploaded['glibc-neutered-x86_64.tar.gz'])
+                self.assertEqual(1, sum(args[:3] == ('gh', 'api', '--method') for args in calls))
+                self.assertEqual('release.json', calls[-1][-1].split('/')[-1])
+                self.assertEqual('gh', calls[-1][0])
+                self.assertFalse(any(args[:3] == ('gh', 'release', 'edit') for args in calls))
+                uploaded['glibc-neutered-x86_64.tar.gz'] = b'conflicting bytes'
+                with self.assertRaisesRegex(ValueError, 'different bytes'):
+                    publish.stage(artifacts, assets, {'build_id': 'example'}, 'build-example')
+
     def test_control_signature_is_required_and_tampering_is_rejected(self):
         def member(files):
             buffer = io.BytesIO()

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Publish validated native artifacts to immutable R2 snapshots and GitHub."""
 import argparse
+import gzip
 import hashlib
 import io
 import json
@@ -25,13 +26,31 @@ def run(*args):
     return subprocess.run(args, check=True, stdout=subprocess.PIPE, text=True).stdout
 
 def release(tag):
-    result = subprocess.run(['gh', 'api', 'repos/' + os.environ['GITHUB_REPOSITORY'] +
-                             '/releases/tags/' + tag], capture_output=True, text=True)
+    # The tag endpoint excludes drafts. Listing with push access includes them.
+    result = subprocess.run(['gh', 'api', '--paginate', '--slurp',
+                             'repos/' + os.environ['GITHUB_REPOSITORY'] + '/releases?per_page=100'],
+                            capture_output=True, text=True)
     if result.returncode:
-        if 'HTTP 404' in result.stderr:
-            return None
         raise RuntimeError(result.stderr)
-    return json.loads(result.stdout)
+    matches = [item for page in json.loads(result.stdout) for item in page if item['tag_name'] == tag]
+    if len(matches) > 1:
+        raise ValueError('Multiple releases use the same build tag')
+    return matches[0] if matches else None
+
+def archive(directory, destination):
+    # Retry staging from the same artifacts without depending on extraction times.
+    with destination.open('wb') as output, gzip.GzipFile(fileobj=output, mode='wb', filename='', mtime=0) as compressed:
+        with tarfile.open(fileobj=compressed, mode='w') as tar:
+            for path in [directory] + sorted(directory.rglob('*')):
+                name = '.' if path == directory else './' + path.relative_to(directory).as_posix()
+                member = tar.gettarinfo(str(path), arcname=name)
+                member.uid = member.gid = member.mtime = 0
+                member.uname = member.gname = ''
+                if member.isfile():
+                    with path.open('rb') as data:
+                        tar.addfile(member, data)
+                else:
+                    tar.addfile(member)
 
 def members(data):
     parts = []
@@ -164,8 +183,7 @@ def stage(artifacts, assets, lock, tag):
     for arch in ARCHES:
         directory = artifacts / ('glibc-neutered-' + arch)
         records[arch] = validate(directory, arch, lock)
-        run('tar', '-czf', str(assets / ('glibc-neutered-' + arch + '.tar.gz')),
-            '-C', str(directory), '.')
+        archive(directory, assets / ('glibc-neutered-' + arch + '.tar.gz'))
     manifest = {'build_id': lock['build_id'], 'version': records[ARCHES[0]]['version'],
                 'source_sha': os.environ['GITHUB_SHA'], 'run_number': int(os.environ['GITHUB_RUN_NUMBER']),
                 'repository': PUBLIC + 'builds/' + lock['build_id'],
@@ -174,12 +192,18 @@ def stage(artifacts, assets, lock, tag):
     (assets / 'release.json').write_text(json.dumps(manifest, indent=2) + '\n')
     current = release(tag)
     if current is None:
-        run('gh', 'release', 'create', tag, '--draft', '--latest=false',
-            '--target', os.environ['GITHUB_SHA'], '--title', 'glibc-neutered ' + manifest['version'],
-            '--notes', 'Signed APKs for x86_64 and aarch64. Repository: ' + manifest['repository'] +
+        body = {'tag_name': tag, 'draft': True, 'make_latest': 'false',
+                'target_commitish': os.environ['GITHUB_SHA'],
+                'name': 'glibc-neutered ' + manifest['version'],
+                'body': 'Signed APKs for x86_64 and aarch64. Repository: ' + manifest['repository'] +
             '\nBoth native builds, hardening probes, ABI checks and the downstream raw failure gate passed. '
-            'Every upstream failure is retained in the testresults APK.')
-        current = release(tag)
+            'Every upstream failure is retained in the testresults APK.'}
+        with tempfile.TemporaryDirectory() as directory:
+            request = Path(directory) / 'release.json'
+            request.write_text(json.dumps(body))
+            current = json.loads(run('gh', 'api', '--method', 'POST',
+                                     'repos/' + os.environ['GITHUB_REPOSITORY'] + '/releases',
+                                     '--input', str(request)))
     if not current['draft']:
         raise ValueError('Refusing to change a published release')
     existing = {a['name'] for a in current['assets']}

@@ -45,6 +45,8 @@ The successful build record includes hashes, source/recipe/tool pins, patched so
 
 Validated archives are first uploaded to a GitHub draft tagged `build-<full-input-hash>`. Its manifest is uploaded last. A complete draft lets the next check resume publication using the original bytes, including after a documentation-only commit. Partial staging failures require rerunning the original failed job.
 
+Draft discovery uses GitHub's paginated release listing, which includes drafts for callers with push access; the published-tag endpoint does not. Creation uses the returned draft object directly. Archive timestamps and owner metadata are normalized, so retrying staging from the original artifacts produces identical bytes. Existing assets must match; nothing is overwritten.
+
 R2 uses bucket `werewolf` and prefix `apk/glibc-neutered/`, via the existing account endpoint. Each immutable snapshot has `builds/<input-hash>/<arch>/` containing APKs and a signed index. Objects upload before the index; both architectures and source archives precede the completion manifest. Existing objects must match byte-for-byte.
 
 `current.json` points to the complete snapshot. It updates only after both repositories exist, and an older workflow cannot replace a pointer from a newer run. The GitHub draft becomes public last. The public repository URL is `https://dist.werewolf-linux.org/apk/glibc-neutered/builds/<input-hash>`; APK clients append the architecture.
