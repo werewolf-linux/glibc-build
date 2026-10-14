@@ -27,7 +27,7 @@ A maintained version pin delays security updates and duplicates Wolfi's release 
 
 `refresh.py` clones Wolfi and selects the highest numeric stable version that provides the primary glibc virtual. It requires the latest recipe's exact source pin; invalid new inputs stop rather than falling back. It captures the unchanged recipe, complete supporting directory, pipelines and signing public key under `build/inputs/`.
 
-The input lock hashes those files and our patches, scripts, tests, profile, workflow, tool pins and policy. Its build identity excludes unrelated Wolfi commits and our documentation. Both builders download the same captured artifact and verify every input. Nothing discovers a second upstream version during that build.
+The input lock hashes those files, records upstream file modes, and hashes our patches, scripts, tests, profile, workflow, tool pins and policy. The shared input artifact is a tar archive: GitHub artifact ZIP extraction otherwise removes executable bits from Wolfi helpers. Native builders and the publisher unpack it before verification; any mode change fails verification. Its build identity excludes unrelated Wolfi commits and our documentation. Both builders download the same captured artifact and verify every input. Nothing discovers a second upstream version during that build.
 
 `policy.json` maintains a downstream revision, independent of glibc's version. The package epoch is Wolfi's epoch plus this revision. Increment it when policy, packaging or test behavior changes; patches and input hashes also distinguish releases. No maintained glibc version is needed.
 
@@ -65,3 +65,5 @@ A published package passes these package gates; it is not evidence that every We
 A complete GitHub draft preserves validated bytes across R2 failures. Uploads are idempotent and reject conflicting bytes. The completion manifest and public GitHub release appear after both signed repositories. The ten-minute schedule is a check interval, not a release-latency guarantee.
 
 Sources: [GitHub schedules](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule), [R2 S3 compatibility](https://developers.cloudflare.com/r2/api/s3/api/).
+
+Artifact transport: [GitHub permission preservation](https://github.com/actions/upload-artifact#permission-loss).
