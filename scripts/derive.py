@@ -53,6 +53,7 @@ def derive():
             'branch': 'release/${{package.version}}/master'}:
         raise ValueError('Review changed upstream source checkout before deriving')
     pipeline[0] = {'name': 'Fetch the locked glibc commit',
+                   'needs': {'packages': ['git']},
                    'runs': 'python3 neutered-source.py . "${{vars.glibc-expected-commit}}"\n'}
     # git apply refuses fuzzy context matching; verify each hunk before applying.
     pipeline.insert(2, {'name': 'Apply Werewolf policy patches', 'runs':

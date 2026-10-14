@@ -20,6 +20,7 @@ def main():
         assert hashlib.sha256((INPUTS/name).read_bytes()).hexdigest() == digest, name
     upstream = yaml.safe_load((INPUTS/'upstream.yaml').read_text())
     derived = derive()
+    assert 'git' in derived['pipeline'][0]['needs']['packages'], 'source fetch requires Git in the guest'
     configure = lambda c: next(x['runs'] for x in c['pipeline'] if x.get('name') == 'Configure glibc')
     flags = lambda s: set(re.findall(r'--[a-zA-Z0-9_-]+(?:=[^\s\\]+)?', s))
     assert flags(configure(upstream)) <= flags(configure(derived)), 'upstream configure flags removed'

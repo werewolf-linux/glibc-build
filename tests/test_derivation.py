@@ -12,6 +12,10 @@ sys.path.insert(0, str(ROOT/'scripts'))
 import derive
 
 class Derivation(unittest.TestCase):
+    def test_source_fetch_declares_its_guest_dependency(self):
+        result = derive.derive()
+        self.assertIn('git', result['pipeline'][0]['needs']['packages'])
+
     def test_future_upstream_flag_survives(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
