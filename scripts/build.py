@@ -39,6 +39,13 @@ def sha256(path):
             digest.update(block)
     return digest.hexdigest()
 
+if runner == 'bubblewrap':
+    executable = Path(shutil.which('bwrap')).resolve()
+    manifest['bubblewrap_sha256'] = sha256(executable)
+    profile = executable.with_suffix('.apparmor')
+    if profile.is_file():
+        manifest['apparmor_profile_sha256'] = sha256(profile)
+
 with (scratch/'lock').open('w') as lock:
     fcntl.flock(lock, fcntl.LOCK_EX)
     if runner == 'qemu':

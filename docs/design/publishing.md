@@ -29,6 +29,8 @@ All jobs use explicitly selected Ubuntu 26.04 GitHub runners; native builds use 
 
 Obsolete PR builds are canceled per architecture; production runs remain serialized without cancellation. Discovery has a 15-minute limit and publication a 30-minute limit. Apt retries downloads three times. Melange downloads retry transient errors with bounded pauses and timeouts; installation under `build/tools` needs no root privileges. Its pinned SHA-256 is checked before extraction, including under optimized Python.
 
+Ubuntu's AppArmor bubblewrap child profile denies capabilities, including the `sys_chroot` needed by APK's fresh-root bootstrap test. CI copies the installed bubblewrap into `build/tools` and loads a separate profile attached to that exact executable. Its child allows only `sys_chroot`; the system profile and user-namespace restrictions stay in force. Preflight requires chroot to succeed for the private copy and remain denied for the system binary before building. Runner provenance records binary and profile hashes. A changed profile contract stops setup for review.
+
 Discovery checks the GitHub runner's preinstalled AWS CLI and OpenSSL before starting native builds. Publication uses those same runner-provided tools; it does not depend on an Ubuntu `awscli` package.
 
 `refresh.py` clones Wolfi and selects the highest numeric stable version that provides the primary glibc virtual. It requires the latest recipe's exact source pin; invalid new inputs stop rather than falling back. It captures the unchanged recipe, complete supporting directory, pipelines and signing public key under `build/inputs/`.
