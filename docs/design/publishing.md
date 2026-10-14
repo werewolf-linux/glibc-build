@@ -25,6 +25,8 @@ A maintained version pin delays security updates and duplicates Wolfi's release 
 
 `refresh.yml` runs at minutes 7, 17, 27, 37, 47 and 57, on main pushes and manually. GitHub schedules are best effort. One concurrency group serializes discovery, both builds and publication; redundant pending checks can be replaced.
 
+Discovery checks the GitHub runner's preinstalled AWS CLI and OpenSSL before starting native builds. Publication uses those same runner-provided tools; it does not depend on an Ubuntu `awscli` package.
+
 `refresh.py` clones Wolfi and selects the highest numeric stable version that provides the primary glibc virtual. It requires the latest recipe's exact source pin; invalid new inputs stop rather than falling back. It captures the unchanged recipe, complete supporting directory, pipelines and signing public key under `build/inputs/`.
 
 The input lock hashes those files, records upstream file modes, and hashes our patches, scripts, tests, profile, workflow, tool pins and policy. The shared input artifact is a tar archive: GitHub artifact ZIP extraction otherwise removes executable bits from Wolfi helpers. Native builders and the publisher unpack it before verification; any mode change fails verification. Its build identity excludes unrelated Wolfi commits and our documentation. Both builders download the same captured artifact and verify every input. Nothing discovers a second upstream version during that build.
