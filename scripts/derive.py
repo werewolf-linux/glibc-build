@@ -47,6 +47,13 @@ def derive():
     pipeline = config['pipeline']
     assert pipeline[0]['uses'] == 'git-checkout'
     assert pipeline[1]['uses'] == 'patch'
+    if pipeline[0]['with'] != {
+            'expected-commit': '${{vars.glibc-expected-commit}}',
+            'repository': 'https://sourceware.org/git/glibc.git',
+            'branch': 'release/${{package.version}}/master'}:
+        raise ValueError('Review changed upstream source checkout before deriving')
+    pipeline[0] = {'name': 'Fetch the locked glibc commit',
+                   'runs': 'python3 neutered-source.py . "${{vars.glibc-expected-commit}}"\n'}
     # git apply refuses fuzzy context matching; verify each hunk before applying.
     pipeline.insert(2, {'name': 'Apply Werewolf policy patches', 'runs':
         'while IFS= read -r patch; do\n'
@@ -176,6 +183,7 @@ def main():
     shutil.copytree(ROOT / 'build/inputs/upstream', context)
     for path in ['patches', 'tests', 'profile']:
         shutil.copytree(ROOT / path, context / path, dirs_exist_ok=True)
+    shutil.copyfile(ROOT / 'scripts/source.py', context / 'neutered-source.py')
     recipe = ROOT / 'build/glibc.yaml'
     recipe.write_text(yaml.safe_dump(derive(), sort_keys=False, width=120))
     print(recipe)

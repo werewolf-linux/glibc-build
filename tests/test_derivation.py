@@ -39,6 +39,18 @@ class Derivation(unittest.TestCase):
             with patch.object(derive, 'ROOT', root), self.assertRaises(AssertionError):
                 derive.derive()
 
+    def test_changed_upstream_source_checkout_requires_review(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root/'build/inputs').mkdir(parents=True)
+            upstream = yaml.safe_load((ROOT/'build/inputs/upstream.yaml').read_text())
+            upstream['pipeline'][0]['with']['recurse-submodules'] = 'true'
+            (root/'build/inputs/upstream.yaml').write_text(yaml.safe_dump(upstream))
+            shutil.copyfile(ROOT/'build/inputs/upstream.lock.json', root/'build/inputs/upstream.lock.json')
+            shutil.copyfile(ROOT/'policy.json', root/'policy.json')
+            with patch.object(derive, 'ROOT', root), self.assertRaisesRegex(ValueError, 'Review changed'):
+                derive.derive()
+
     def test_removed_facilities_cannot_resolve_back_to_wolfi(self):
         result = derive.derive()
         names = [x['name'] for x in result['subpackages']]

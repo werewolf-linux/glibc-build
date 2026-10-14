@@ -44,8 +44,9 @@ class SourcePreparation(unittest.TestCase):
             destination = root/'prepared'
             actual_run = subprocess.run
             def quiet_run(*args, **kwargs):
-                kwargs.setdefault('stdout', subprocess.PIPE)
-                kwargs.setdefault('stderr', subprocess.PIPE)
+                if not kwargs.get('capture_output'):
+                    kwargs.setdefault('stdout', subprocess.PIPE)
+                    kwargs.setdefault('stderr', subprocess.PIPE)
                 return actual_run(*args, **kwargs)
             with patch.object(prepare, 'ROOT', root), patch.object(prepare, 'INPUTS', inputs), \
                  patch.object(sys, 'argv', ['prepare.py', str(destination), '--source', str(source)]), \

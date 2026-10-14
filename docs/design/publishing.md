@@ -27,6 +27,8 @@ A maintained version pin delays security updates and duplicates Wolfi's release 
 
 All jobs use explicitly selected Ubuntu 26.04 GitHub runners; native builds use `ubuntu-26.04` for x86_64 and `ubuntu-26.04-arm` for aarch64. Melange supplies the Wolfi build environment and compiler toolchain.
 
+Obsolete PR builds are canceled per architecture; production runs remain serialized without cancellation. Discovery has a 15-minute limit and publication a 30-minute limit. Apt retries downloads three times. Melange downloads retry transient errors with bounded pauses and timeouts; installation under `build/tools` needs no root privileges. Its pinned SHA-256 is checked before extraction, including under optimized Python.
+
 Discovery checks the GitHub runner's preinstalled AWS CLI and OpenSSL before starting native builds. Publication uses those same runner-provided tools; it does not depend on an Ubuntu `awscli` package.
 
 `refresh.py` clones Wolfi and selects the highest numeric stable version that provides the primary glibc virtual. It requires the latest recipe's exact source pin; invalid new inputs stop rather than falling back. It captures the unchanged recipe, complete supporting directory, pipelines and signing public key under `build/inputs/`.
@@ -36,6 +38,8 @@ The input lock hashes those files, records upstream file modes, and hashes our p
 `policy.json` maintains a downstream revision, independent of glibc's version. The package epoch is Wolfi's epoch plus this revision. Increment it when policy, packaging or test behavior changes; patches and input hashes also distinguish releases. No maintained glibc version is needed.
 
 The native builders retain Wolfi's compiler environment and flags. Strict patch application, focused hardening probes, full upstream tests, ABI checks and installed-package checks must succeed. The raw failure ceiling is explicitly changed from Wolfi's 2% to the requested 5.5%. The publisher recounts raw PASS/FAIL files using exact integer arithmetic; UNSUPPORTED and XFAIL cannot dilute the denominator. No failure is reclassified.
+
+Preparation and Melange use the same `source.py` fetcher. It fetches only Wolfi's exact glibc commit with depth one, trying the maintained `kraj/glibc` mirror before Sourceware. Each fetch has a 120-second limit; three rounds use 15- and 45-second pauses. Git verifies received objects; a mismatched commit stops immediately. Branch tips never replace the pin. Upstream inputs stay unchanged; an unexpected upstream checkout configuration requires review.
 
 The successful build record includes hashes, source/recipe/tool pins, patched source and public signing key. The publisher verifies these records, APK control signatures, payload hashes, signed index coverage and matching versions/architectures. Ephemeral CI keys cannot be published.
 
@@ -62,12 +66,18 @@ Native suites are expensive and deliberate feature removal causes upstream failu
 
 Publication reads artifacts from its own trusted workflow run, never PR artifacts. PR validation uses ephemeral keys. Every native gate must pass; drift stops the update and leaves the previous release available. Bucket reads use the authenticated S3 API, and authentication errors never mean an object is absent. CI is the single writer to this prefix.
 
+Mirrors provide availability, not a new trust root: the commit remains pinned by the captured Wolfi recipe. Fetching uses argument arrays, validates the pin before invoking Git, disables Git hooks and refuses an existing checkout. New native evidence is required for this packaging revision.
+
 A published package passes these package gates; it is not evidence that every Werewolf form is ready to adopt it. Loader/libc coherence, IPE coverage, service performance and PostgreSQL migration remain deployment requirements.
 
 ## Reliability Considerations
 
 A complete GitHub draft preserves validated bytes across R2 failures. Uploads are idempotent and reject conflicting bytes. The completion manifest and public GitHub release appear after both signed repositories. The ten-minute schedule is a check interval, not a release-latency guarantee.
 
+Each architecture still performs separate patch preparation and a clean Melange checkout. Both now use bounded shallow fetches rather than a full-history clone. Simultaneous mirror outages remain a build blocker; no previous release or different commit is silently substituted.
+
 Sources: [GitHub schedules](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule), [R2 S3 compatibility](https://developers.cloudflare.com/r2/api/s3/api/).
 
 Artifact transport: [GitHub permission preservation](https://github.com/actions/upload-artifact#permission-loss).
+
+Source mirrors: [GNU upstream](https://www.sourceware.org/glibc/sources.html), [maintained mirror](https://github.com/kraj/glibc).
