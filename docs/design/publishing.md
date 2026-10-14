@@ -41,7 +41,7 @@ R2 uses bucket `werewolf` and prefix `apk/glibc-neutered/`, via the existing acc
 
 `current.json` points to the complete snapshot. It updates only after both repositories exist, and an older workflow cannot replace a pointer from a newer run. The GitHub draft becomes public last. The public repository URL is `https://dist.werewolf-linux.org/apk/glibc-neutered/builds/<input-hash>`; APK clients append the architecture.
 
-Jobs use the `release` environment and existing `WEREWOLF_PACKAGES_KEY`, `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY` secrets. Signing happens in its own step, so the private key environment does not reach the build. The public key must equal the committed Werewolf trust root, and its APK key filename remains `werewolf-packages.rsa.pub`.
+Jobs use the `release` environment and existing `WEREWOLF_PACKAGES_KEY`, `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY` secrets. Signing happens in its own step, so the private key environment does not reach the build. OpenSSL converts the supplied RSA key to Melange's required PKCS#1 encoding through standard input; the private file is created with mode 0600. The public key must equal the committed Werewolf trust root, and its APK key filename remains `werewolf-packages.rsa.pub`.
 
 ## Drawbacks
 
