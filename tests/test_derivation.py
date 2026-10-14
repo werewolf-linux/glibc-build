@@ -12,6 +12,10 @@ sys.path.insert(0, str(ROOT/'scripts'))
 import derive
 
 class Derivation(unittest.TestCase):
+    def test_source_fetch_declares_its_guest_dependency(self):
+        result = derive.derive()
+        self.assertIn('git', result['pipeline'][0]['needs']['packages'])
+
     def test_future_upstream_flag_survives(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -37,6 +41,18 @@ class Derivation(unittest.TestCase):
             (root/'build/inputs/upstream.lock.json').write_text(json.dumps(lock))
             shutil.copyfile(ROOT/'policy.json', root/'policy.json')
             with patch.object(derive, 'ROOT', root), self.assertRaises(AssertionError):
+                derive.derive()
+
+    def test_changed_upstream_source_checkout_requires_review(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root/'build/inputs').mkdir(parents=True)
+            upstream = yaml.safe_load((ROOT/'build/inputs/upstream.yaml').read_text())
+            upstream['pipeline'][0]['with']['recurse-submodules'] = 'true'
+            (root/'build/inputs/upstream.yaml').write_text(yaml.safe_dump(upstream))
+            shutil.copyfile(ROOT/'build/inputs/upstream.lock.json', root/'build/inputs/upstream.lock.json')
+            shutil.copyfile(ROOT/'policy.json', root/'policy.json')
+            with patch.object(derive, 'ROOT', root), self.assertRaisesRegex(ValueError, 'Review changed'):
                 derive.derive()
 
     def test_removed_facilities_cannot_resolve_back_to_wolfi(self):

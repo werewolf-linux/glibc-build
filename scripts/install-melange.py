@@ -6,6 +6,8 @@ from pathlib import Path
 import platform
 import subprocess
 import tempfile
+import time
+import urllib.error
 import urllib.request
 
 parser = argparse.ArgumentParser(description='Install the hash-pinned native Melange binary')
@@ -19,9 +21,20 @@ filename = f"melange_{config['version']}_{system}_{arch}.tar.gz"
 url = f"https://github.com/chainguard-dev/melange/releases/download/v{config['version']}/{filename}"
 with tempfile.TemporaryDirectory() as directory:
     archive = Path(directory)/filename
-    with urllib.request.urlopen(url, timeout=60) as response:
-        data = response.read()
-    assert hashlib.sha256(data).hexdigest() == config[system+'_'+arch]
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(url, timeout=60) as response:
+                data = response.read()
+            break
+        except urllib.error.URLError as error:
+            if isinstance(error, urllib.error.HTTPError) and error.code not in (429, 500, 502, 503, 504):
+                raise
+            if attempt == 2:
+                raise
+            print('install-melange: download failed; retrying', flush=True)
+            time.sleep((5, 15)[attempt])
+    if hashlib.sha256(data).hexdigest() != config[system+'_'+arch]:
+        raise ValueError('Melange archive does not match its pinned SHA-256')
     archive.write_bytes(data)
     member = f"melange_{config['version']}_{system}_{arch}/melange"
     subprocess.run(['tar', '-xzf', str(archive), '-C', directory, '--strip-components=1', member], check=True)

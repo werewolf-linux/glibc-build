@@ -24,7 +24,7 @@ The [FreeBSD Porter's Handbook](https://docs.freebsd.org/en/books/porters-handbo
 
 `scripts/refresh.py` captures the newest primary stable Wolfi glibc recipe and its complete supporting files under `build/inputs/`. Numeric version discovery follows new release streams automatically; strict patch application and input validation stop incompatible updates. Build identities change when relevant upstream or downstream inputs change.
 
-`scripts/prepare.py` fetches the exact locked glibc commit into a new directory, applies Wolfi patches first, and runs `git apply --check` before each policy patch. Context mismatches stop preparation. It never resets a developer checkout or substitutes a newer source commit. Unchanged-context offsets are acceptable; fuzzy context matching is not.
+`scripts/prepare.py` uses the same bounded, exact-commit shallow fetcher as Melange, applies Wolfi patches first, and runs `git apply --check` before each policy patch. Context mismatches stop preparation. It never resets a developer checkout or substitutes a newer source commit. Unchanged-context offsets are acceptable; fuzzy context matching is not.
 
 On patch drift, prepare an unmodified new source, apply the old series one patch at a time, and manually revise only the failing mechanism. Compare the final diff and behavior with the previous validated release; update each patch's base/reference as appropriate. Retain explanatory context rather than generating zero-context patches. Increment `policy.json`'s revision for policy/packaging changes before releasing new package bytes under an existing upstream version.
 

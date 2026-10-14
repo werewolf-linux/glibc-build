@@ -12,7 +12,8 @@ concurrency:
   cancel-in-progress: false
 jobs:
   discover:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
     # GitHub requires push access to discover recoverable draft releases.
     permissions:
       contents: write
@@ -53,7 +54,8 @@ jobs:
     if: >-
       always() && !cancelled() && needs.discover.result == 'success' &&
       (needs.build.result == 'success' || needs.discover.outputs.state == 'publish')
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
     environment: release
     permissions:
       contents: write
