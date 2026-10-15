@@ -3,6 +3,7 @@
 import copy
 import json
 from pathlib import Path
+import shlex
 import shutil
 import yaml
 
@@ -32,13 +33,19 @@ def derive():
     assert config['vars']['glibc-expected-commit'] == lock['glibc_commit']
     original = config['package']['name']
     config['package']['name'] = original.replace('glibc-', 'glibc-neutered-', 1)
+    wolfi = f"{config['package']['version']}-r{config['package']['epoch']}"
     config['package']['epoch'] += lock['revision']
     config['package']['description'] += ' (Werewolf fixed hardening policy)'
     deps = config['package']['dependencies']
-    deps['provides'].append(original + '=${{package.full-version}}')
+    # glibc-neutered names whichever stream is newest, so a consumer can
+    # require this policy without naming a glibc version.
+    deps['provides'] += [original + '=${{package.full-version}}', 'glibc-neutered=${{package.full-version}}']
     deps['replaces'] = [original]
     deps['provider-priority'] = '${{vars.neutered-priority}}'
-    config['vars']['neutered-priority'] = '10000'
+    # Above every Wolfi stream (2.44 -> 244), and a newer stream above an
+    # older one (2.44 -> 10244), as Wolfi's own provider-priority orders them.
+    config['var-transforms'].append({'from': '${{package.version}}', 'match': '([0-9])[.]([0-9]+)',
+                                     'replace': '10$1$2', 'to': 'neutered-priority'})
     config['vars']['neutered-test-repository'] = ''
     old_loader = 'ld-linux-${{package.version}}'
     loader = 'ld-linux-neutered-${{package.version}}'
@@ -93,18 +100,32 @@ def derive():
         'python3 tests/run.py --build build --cc gcc --baseline-loader "$baseline" --report build/policy-report.json\n'})
     pipeline.insert(index, {'uses': 'test/compiler/hardening-check', 'with': {'cc': 'gcc'}})
     index = next(i for i, x in enumerate(pipeline) if x.get('uses') == 'strip')
-    pipeline.insert(index, {'name': 'Remove unsupported runtime facilities', 'runs':
+    removal = {'name': 'Remove unsupported runtime facilities', 'runs':
         'rm -rf "${{targets.destdir}}/usr/lib/gconv"\n'
         'rm -f "${{targets.destdir}}/usr/bin/iconvconfig" '
         '"${{targets.destdir}}/usr/bin/sotruss" '
         '"${{targets.destdir}}/usr/bin/pcprofiledump"\n'
         'rm -f "${{targets.destdir}}"/usr/lib/libnss_db.so* "${{targets.destdir}}"/usr/lib/libnss_hesiod.so* '
-        '"${{targets.destdir}}"/usr/lib/libpcprofile.so* "${{targets.destdir}}"/usr/lib/libmemusage.so* "${{targets.destdir}}"/usr/lib/libsotruss.so* "${{targets.destdir}}"/usr/lib/libc_malloc_debug.so*\n'})
+        '"${{targets.destdir}}"/usr/lib/libpcprofile.so* "${{targets.destdir}}"/usr/lib/libmemusage.so* "${{targets.destdir}}"/usr/lib/libsotruss.so* "${{targets.destdir}}"/usr/lib/libc_malloc_debug.so*\n'}
+    pipeline.insert(index, removal)
     kept = []
     for sub in config['subpackages']:
         name = sub['name'].replace('${{package.name}}', 'glibc')
         base = name.split('-${{package.version}}')[0]
         if base in REMOVED:
+            # Its files would stay in the main package: xtrace alone needs bash.
+            for step in sub['pipeline']:
+                for line in step['runs'].splitlines():
+                    words = shlex.split(line)
+                    if not words or words[0] == 'mkdir':
+                        continue
+                    if words[0] != 'mv':
+                        raise ValueError('Review changed upstream ' + base + ' packaging before deriving')
+                    for source in words[1:-1]:
+                        path = source.removeprefix('${{targets.destdir}}/')
+                        if path == source or '..' in path.split('/'):
+                            raise ValueError('Review changed upstream ' + base + ' packaging before deriving')
+                        removal['runs'] += 'rm -rf "${{targets.destdir}}"/' + path + '\n'
             continue
         if '${{package.name}}' in sub['name']:
             original_name = sub['name'].replace('${{package.name}}', original)
@@ -161,6 +182,11 @@ def derive():
         'pipeline': [{'runs': 'install -Dm644 profile/nsswitch.conf "${{targets.subpkgdir}}/etc/nsswitch.conf"\n'}],
         'test': {'pipeline': [{'runs': "cmp /etc/nsswitch.conf - <<'NEUTERED_NSS'\n" +
             (ROOT/'profile/nsswitch.conf').read_text()+'NEUTERED_NSS\n'}]}})
+    # Each package names the Wolfi source and version it rebuilds, unversioned
+    # so that all may: Werewolf matches Wolfi's CVE fixes against it, not ours.
+    for section in [config['package']] + config['subpackages']:
+        section.setdefault('dependencies', {}).setdefault('provides', []).append(
+            'wolfi-origin:' + original + ':' + wolfi)
     # Keep the original ratio and assertions; find must use explicit commands.
     for section in [config] + config['subpackages']:
         tests = section.get('test', {}).get('pipeline', [])

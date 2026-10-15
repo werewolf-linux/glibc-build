@@ -84,5 +84,43 @@ class Derivation(unittest.TestCase):
         for line in (ROOT/'profile/nsswitch.conf').read_text().splitlines():
             self.assertLessEqual(set(line.split(':', 1)[1].split()), {'files', 'dns'})
 
+    def test_removed_subpackage_files_leave_the_main_package(self):
+        result = derive.derive()
+        removal = next(x['runs'] for x in result['pipeline'] if x.get('name') == 'Remove unsupported runtime facilities')
+        # xtrace is a bash script: left behind, every image would need bash.
+        for path in ['usr/bin/xtrace', 'usr/bin/mtrace', 'usr/bin/sprof', 'usr/bin/makedb', 'usr/lib/audit/*']:
+            self.assertIn('rm -rf "${{targets.destdir}}"/' + path + '\n', removal)
+
+    def test_changed_removed_subpackage_packaging_requires_review(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root/'build/inputs').mkdir(parents=True)
+            upstream = yaml.safe_load((ROOT/'build/inputs/upstream.yaml').read_text())
+            tracing = next(x for x in upstream['subpackages'] if x['name'] == '${{package.name}}-tracing')
+            tracing['pipeline'][0]['runs'] += 'cp "${{targets.destdir}}"/usr/bin/new "${{targets.subpkgdir}}"/usr/bin\n'
+            (root/'build/inputs/upstream.yaml').write_text(yaml.safe_dump(upstream))
+            shutil.copyfile(ROOT/'build/inputs/upstream.lock.json', root/'build/inputs/upstream.lock.json')
+            shutil.copyfile(ROOT/'policy.json', root/'policy.json')
+            shutil.copytree(ROOT/'profile', root/'profile')
+            with patch.object(derive, 'ROOT', root), self.assertRaisesRegex(ValueError, 'Review changed upstream glibc-tracing'):
+                derive.derive()
+
+    def test_every_package_names_the_wolfi_source_it_rebuilds(self):
+        upstream = yaml.safe_load((ROOT/'build/inputs/upstream.yaml').read_text())['package']
+        result = derive.derive()
+        source = f"wolfi-origin:{upstream['name']}:{upstream['version']}-r{upstream['epoch']}"
+        for section in [result['package']] + result['subpackages']:
+            # Unversioned: apk installs one provider of each name=version.
+            self.assertIn(source, section['dependencies']['provides'])
+
+    def test_unversioned_virtual_prefers_policy_libc_and_newer_streams(self):
+        result = derive.derive()
+        self.assertIn('glibc-neutered=${{package.full-version}}', result['package']['dependencies']['provides'])
+        self.assertNotIn('neutered-priority', result['vars'])
+        transform = next(x for x in result['var-transforms'] if x['to'] == 'neutered-priority')
+        wolfi = next(x for x in result['var-transforms'] if x['to'] == 'provider-priority')
+        self.assertEqual((wolfi['from'], wolfi['match']), (transform['from'], transform['match']))
+        self.assertEqual('10$1$2', transform['replace'])
+
 if __name__ == '__main__':
     unittest.main()

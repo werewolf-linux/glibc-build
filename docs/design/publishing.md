@@ -51,9 +51,13 @@ Draft discovery uses GitHub's paginated release listing, which includes drafts f
 
 R2 uses bucket `werewolf` and prefix `apk/glibc-neutered/`, via the existing account endpoint. Each immutable snapshot has `builds/<input-hash>/<arch>/` containing APKs and a signed index. Objects upload before the index; both architectures and source archives precede the completion manifest. Existing objects must match byte-for-byte.
 
-`current.json` points to the complete snapshot. It updates only after both repositories exist, and an older workflow cannot replace a pointer from a newer run. The GitHub draft becomes public last. The public repository URL is `https://dist.werewolf-linux.org/apk/glibc-neutered/builds/<input-hash>`; APK clients append the architecture.
+Machines follow one stable repository, `https://dist.werewolf-linux.org/apk/glibc-neutered`; APK clients append the architecture. Its `<arch>/` directories keep every published APK and one index naming them all, so locks and installed machines still resolve after newer builds. The publisher verifies the existing index against the committed trust root, adds the new snapshot's entries, signs the result with the release key and checks that signature, all before the first upload. A version already listed keeps its first build; a rebuild of the same version stays in its snapshot only, logged, until `policy.json` is incremented. New APKs upload before the index, the only object ever replaced.
 
-Jobs use the `release` environment and existing `WEREWOLF_PACKAGES_KEY`, `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY` secrets. Signing happens in its own step, so the private key environment does not reach the build. OpenSSL converts the supplied RSA key to Melange's required PKCS#1 encoding through standard input; the private file is created with mode 0600. The public key must equal the committed Werewolf trust root, and its APK key filename remains `werewolf-packages.rsa.pub`.
+`current.json` points to the complete snapshot. It updates only after both repositories exist, and an older workflow cannot replace a pointer from a newer run. The GitHub draft becomes public last. A snapshot's URL is `https://dist.werewolf-linux.org/apk/glibc-neutered/builds/<input-hash>`.
+
+The main package provides `glibc-neutered`, so a consumer's world can require this policy without a glibc version. Provider priority is 10 followed by Wolfi's stream digits (2.44 gives 10244): above every Wolfi stream, and newer streams above older ones. Every package also provides `wolfi-origin:<wolfi origin>:<wolfi version>`, unversioned so all may, naming the Wolfi build it rebuilds: Werewolf's updater matches Wolfi's CVE fixes against that version, since ours adds the policy revision.
+
+Jobs use the `release` environment and existing `WEREWOLF_PACKAGES_KEY`, `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY` secrets. Signing happens in its own step, so the private key environment does not reach the build. The publisher writes the same key before signing the stable index. OpenSSL converts the supplied RSA key to Melange's required PKCS#1 encoding through standard input; the private file is created with mode 0600. The public key must equal the committed Werewolf trust root, and its APK key filename remains `werewolf-packages.rsa.pub`.
 
 ## Drawbacks
 
@@ -62,7 +66,8 @@ Native suites are expensive and deliberate feature removal causes upstream failu
 ## Alternatives Considered
 
 - Daily version-update PRs: create a separate pinned recipe stream and delay publication.
-- Reusing one mutable APK index: risks collisions, partial updates and changes to Werewolf's packages.
+- Sharing Werewolf's mutable APK index: couples the two release pipelines and risks changes to Werewolf's packages. The stable index is this repository's alone, append-only, and only re-signed by its single writer.
+- Snapshots alone: a machine's updater keeps the repository it was built with, so it would never see a newer glibc.
 - Rebuilding after publication fails: changes package bytes and makes safe retries harder.
 - Ignoring intentional failures: obscures raw evidence and requires an evolving exception list.
 

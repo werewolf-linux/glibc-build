@@ -241,7 +241,57 @@ def upload(path, key, immutable=True):
     if result.returncode:
         raise RuntimeError(result.stderr)
 
-def publish(assets, lock, tag):
+def entries(parts):
+    # An authenticated index's stanzas, by the APK file each names.
+    text = contents(parts[1][1])['APKINDEX'].decode()
+    found = {}
+    for stanza in text.strip().split('\n\n'):
+        fields = dict(line.split(':', 1) for line in stanza.splitlines())
+        found[fields['P'] + '-' + fields['V'] + '.apk'] = stanza
+    return found
+
+def merge(previous, current):
+    # A published version keeps its first build: machines may hold it.
+    merged, added = dict(previous), []
+    for name, stanza in sorted(current.items()):
+        if name not in merged:
+            merged[name] = stanza
+            added.append(name)
+        elif merged[name] != stanza:
+            print(name + ': the stable repository keeps its earlier build; increment policy.json revision to ship this one')
+    return merged, added
+
+def signed_index(stanzas, key):
+    text = ''.join(stanzas[name] + '\n\n' for name in sorted(stanzas)).encode()
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode='w', format=tarfile.USTAR_FORMAT) as archive:
+        for name, data in [('APKINDEX', text), ('DESCRIPTION', b'')]:
+            item = tarfile.TarInfo(name)
+            item.size, item.mode = len(data), 0o644
+            archive.addfile(item, io.BytesIO(data))
+    control = gzip.compress(buffer.getvalue(), mtime=0)
+    signature = subprocess.run(['openssl', 'dgst', '-sha256', '-sign', str(key)], input=control,
+                               stdout=subprocess.PIPE, check=True).stdout
+    item = tarfile.TarInfo('.SIGN.RSA256.werewolf-packages.rsa.pub')
+    item.size, item.mode, item.uname, item.gname = len(signature), 0o644, 'root', 'root'
+    # apk reads both members as one tar stream: the signature's has no end marker.
+    header = item.tobuf(tarfile.USTAR_FORMAT, tarfile.ENCODING, 'surrogateescape')
+    return gzip.compress(header + signature + b'\0' * (-len(signature) % 512), mtime=0) + control
+
+def stable(root, arch, key, directory):
+    # The stable repository's next index, verified, and the APKs it adds.
+    trust = ROOT / 'release/packages.pub'
+    previous = {}
+    published = directory / (arch + '-previous.tar.gz')
+    if fetch(arch + '/APKINDEX.tar.gz', published):
+        previous = entries(authenticated(published, trust))
+    merged, added = merge(previous, entries(authenticated(root / arch / 'APKINDEX.tar.gz', trust)))
+    index = directory / (arch + '-APKINDEX.tar.gz')
+    index.write_bytes(signed_index(merged, key))
+    authenticated(index, trust)
+    return index, added
+
+def publish(assets, lock, tag, key=ROOT / 'build/keys/werewolf-packages.rsa'):
     assets.mkdir(parents=True, exist_ok=True)
     run('gh', 'release', 'download', tag, '--dir', str(assets), '--clobber')
     manifest = json.loads((assets / 'release.json').read_text())
@@ -250,22 +300,32 @@ def publish(assets, lock, tag):
     if set(manifest['sha256']) != {'glibc-neutered-' + a + '.tar.gz' for a in ARCHES}:
         raise ValueError('Both native architectures are required')
     snapshot = 'builds/' + lock['build_id'] + '/'
-    for name, digest in manifest['sha256'].items():
-        if sha256(assets / name) != digest:
-            raise ValueError('Release archive hash mismatch')
-        arch = next(a for a in ARCHES if name == 'glibc-neutered-' + a + '.tar.gz')
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+    with tempfile.TemporaryDirectory() as directory:
+        work = Path(directory)
+        roots, indexes = {}, {}
+        # Validate and sign everything before the first upload.
+        for name, digest in manifest['sha256'].items():
+            if sha256(assets / name) != digest:
+                raise ValueError('Release archive hash mismatch')
+            arch = next(a for a in ARCHES if name == 'glibc-neutered-' + a + '.tar.gz')
+            roots[arch] = work / arch
             with tarfile.open(assets / name) as archive:
-                archive.extractall(root, filter='data')
-            validate(root, arch, lock, source_sha=manifest['source_sha'])
+                archive.extractall(roots[arch], filter='data')
+            validate(roots[arch], arch, lock, source_sha=manifest['source_sha'])
+            indexes[arch] = stable(roots[arch], arch, key, work)
+        for arch, root in roots.items():
             # Objects first, then signed index; readers never see a partial index.
             for apk in sorted((root / arch).glob('*.apk')):
                 upload(apk, snapshot + arch + '/' + apk.name)
             upload(root / arch / 'APKINDEX.tar.gz', snapshot + arch + '/APKINDEX.tar.gz')
-        upload(assets / name, snapshot + name)
-    upload(assets / 'SHA256SUMS', snapshot + 'SHA256SUMS')
-    upload(assets / 'release.json', snapshot + 'release.json')
+            upload(assets / ('glibc-neutered-' + arch + '.tar.gz'), snapshot + 'glibc-neutered-' + arch + '.tar.gz')
+        upload(assets / 'SHA256SUMS', snapshot + 'SHA256SUMS')
+        upload(assets / 'release.json', snapshot + 'release.json')
+        # The stable repository machines follow: every published APK, kept, and one index.
+        for arch, (index, added) in indexes.items():
+            for name in added:
+                upload(roots[arch] / arch / name, arch + '/' + name)
+            upload(index, arch + '/APKINDEX.tar.gz', immutable=False)
     with tempfile.TemporaryDirectory() as directory:
         current = Path(directory) / 'current'
         if not fetch('current.json', current) or json.loads(current.read_text())['run_number'] <= manifest['run_number']:

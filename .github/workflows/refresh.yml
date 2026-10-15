@@ -85,6 +85,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: build/venv/bin/python scripts/publish.py stage
+      - name: Write production signing key for the stable index
+        env:
+          GLIBC_APK_SIGNING_KEY: ${{ secrets.WEREWOLF_PACKAGES_KEY }}
+        run: |
+          test -n "$GLIBC_APK_SIGNING_KEY"
+          build/venv/bin/python scripts/signing-key.py
       - name: Publish signed APK repositories and complete GitHub release
         env:
           GH_TOKEN: ${{ github.token }}

@@ -42,7 +42,7 @@ Policy patches retain glibc's LGPL-2.1-or-later licensing; copied Wolfi inputs r
 
 GitHub Actions checks Wolfi every ten minutes, captures exact inputs and builds natively on x86_64/aarch64 when those inputs have not been published. Both builds must pass before signed APK repositories publish to Werewolf’s R2 bucket and an immutable GitHub release. The release environment uses the existing Werewolf signing key and R2 secret names. [Publishing](docs/design/publishing.md) describes trust, paths, recovery and setup.
 
-The [native test inventory](docs/audit/native-r13.md) and [performance comparison](docs/design/performance.md) retain evidence. The requested raw failure ceiling is 5.5%; every failure remains visible. Focused hardening probes, ABI and installed-package checks remain required. Package publication does not deploy these packages to production forms.
+The [native test inventory](docs/audit/native-r13.md) and [performance comparison](docs/design/performance.md) retain evidence. The requested raw failure ceiling is 5.5%; every failure remains visible. Focused hardening probes, ABI and installed-package checks remain required. Werewolf images use these packages as their glibc, and machines take each new build from the stable repository at their next update check.
 
 The [patch security review](docs/design/patch-security-review.md) records every removed activation path, retained safeguard, corrected fallback, and remaining release blocker.
 

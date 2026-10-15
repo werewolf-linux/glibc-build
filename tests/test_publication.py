@@ -166,6 +166,28 @@ class ReleaseGate(unittest.TestCase):
             with self.assertRaises(ValueError):
                 publish.authenticated(archive, public)
 
+    def test_stable_index_keeps_every_version_and_each_first_build(self):
+        def stanza(version, checksum):
+            return f'C:{checksum}\nP:glibc-neutered-2.44\nV:{version}\nA:aarch64'
+        previous = {'glibc-neutered-2.44-2.44-r17.apk': stanza('2.44-r17', 'old')}
+        current = {'glibc-neutered-2.44-2.44-r17.apk': stanza('2.44-r17', 'rebuilt'),
+                   'glibc-neutered-2.44-2.44-r18.apk': stanza('2.44-r18', 'new')}
+        merged, added = publish.merge(previous, current)
+        self.assertEqual(['glibc-neutered-2.44-2.44-r18.apk'], added)
+        self.assertIn('C:old', merged['glibc-neutered-2.44-2.44-r17.apk'])
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            private, public = root/'key', root/'key.pub'
+            subprocess.run(['openssl', 'genrsa', '-out', str(private), '2048'], check=True, capture_output=True)
+            subprocess.run(['openssl', 'rsa', '-in', str(private), '-pubout', '-out', str(public)], check=True, capture_output=True)
+            index = root/'APKINDEX.tar.gz'
+            index.write_bytes(publish.signed_index(merged, private))
+            self.assertEqual(index.read_bytes(), publish.signed_index(merged, private))
+            parts = publish.authenticated(index, public)
+            self.assertEqual(merged, publish.entries(parts))
+            # One tar stream across both members: no end marker after the signature.
+            self.assertEqual(1024, len(parts[0][1]))
+
     def results(self, passed, failed):
         files = {f'{i}.test-result': b'PASS: case\n' for i in range(passed)}
         files.update({f'f{i}.test-result': b'FAIL: case\n' for i in range(failed)})
