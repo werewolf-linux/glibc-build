@@ -24,7 +24,7 @@ import notes
 ARCHES = ('x86_64', 'aarch64')
 ENDPOINT = 'https://c860af766754fb92eec27bc723e6db5d.r2.cloudflarestorage.com'
 BUCKET = 'werewolf'
-PREFIX = 'apk/glibc-neutered/'
+PREFIX = 'apk/glibc/'
 PUBLIC = 'https://dist.werewolf-linux.org/' + PREFIX
 # Release notes, staged with the draft and copied beside the snapshot, by type.
 # The JSON goes last: a draft that has it has all three.

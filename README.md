@@ -3,7 +3,7 @@
 Werewolf's glibc: Wolfi's recipe, captured unchanged, plus four policy patches
 ([design](https://github.com/werewolf-linux/werewolf/blob/main/docs/design/glibc-neutered.md),
 [audit](docs/glibc-vuln-audit.md)). Every Werewolf image installs the resulting
-`glibc-neutered` packages from `https://dist.werewolf-linux.org/apk/glibc-neutered`.
+`glibc-neutered` packages from `https://dist.werewolf-linux.org/apk/glibc`.
 
 ## Differences from Wolfi's build
 
