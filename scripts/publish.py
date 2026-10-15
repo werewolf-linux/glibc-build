@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Publish validated native artifacts to immutable R2 snapshots and GitHub."""
 import argparse
+import datetime
 import gzip
 import hashlib
 import io
@@ -11,16 +12,24 @@ import re
 import subprocess
 import tarfile
 import tempfile
+import time
+import urllib.error
+import urllib.request
 import zlib
 import yaml
 from derive import derive
 from inputs import ROOT, verify, sha256
+import notes
 
 ARCHES = ('x86_64', 'aarch64')
 ENDPOINT = 'https://c860af766754fb92eec27bc723e6db5d.r2.cloudflarestorage.com'
 BUCKET = 'werewolf'
 PREFIX = 'apk/glibc-neutered/'
 PUBLIC = 'https://dist.werewolf-linux.org/' + PREFIX
+# Release notes, staged with the draft and copied beside the snapshot, by type.
+# The JSON goes last: a draft that has it has all three.
+NOTES = {'release-notes.md': 'text/markdown; charset=utf-8', 'release-notes.html': 'text/html; charset=utf-8',
+         'release-notes.json': 'application/json'}
 
 def run(*args):
     return subprocess.run(args, check=True, stdout=subprocess.PIPE, text=True).stdout
@@ -177,6 +186,135 @@ def status(tag):
         return 'build'
     return 'publish' if current['draft'] else 'complete'
 
+def download(url):
+    # A public object, or None when it is absent. Any other failure stops the
+    # stage, so notes never call a release the first, or unchanged, because a
+    # read failed; the next scheduled check stages again.
+    # dist.werewolf-linux.org refuses Python's default User-Agent.
+    request = urllib.request.Request(url, headers={'User-Agent': 'glibc-build-publish (+' + notes.SOURCE + ')'})
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(request, timeout=120) as response:
+                return response.read()
+        except urllib.error.HTTPError as error:
+            if error.code == 404:
+                return None
+            if attempt == 2:
+                raise
+        except urllib.error.URLError:
+            if attempt == 2:
+                raise
+        time.sleep(15 * (attempt + 1))
+
+def apk_files(data):
+    # An APK's payload files by path.
+    return contents(members(data)[-1][1])
+
+def stanzas(index):
+    # An authenticated APKINDEX.tar.gz's stanzas as {field: value} maps.
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory) / 'APKINDEX.tar.gz'
+        path.write_bytes(index)
+        text = contents(authenticated(path, ROOT / 'release/packages.pub')[1][1])['APKINDEX'].decode()
+    return [dict(line.split(':', 1) for line in s.splitlines()) for s in text.strip().split('\n\n')]
+
+def stream(version):
+    # glibc-neutered's package stem for a release version: 2.44-r19 is glibc-neutered-2.44.
+    return 'glibc-neutered-' + version.split('-r')[0]
+
+def lookup(path):
+    # A GitHub API read for notes' commit lists; None when GitHub cannot
+    # answer, which the notes render as unavailable, never as no change.
+    try:
+        return json.loads(run('gh', 'api', path))
+    except subprocess.CalledProcessError:
+        return None
+
+def subjects(commits):
+    return [{'sha': c['sha'], 'subject': c['commit']['message'].splitlines()[0]}
+            for c in commits if len(c['parents']) == 1]
+
+def glibc_commit(data):
+    # The glibc commit a test results package was built from, in its recipe.
+    recipe = contents(members(data)[1][1])['.melange.yaml']
+    return yaml.safe_load(recipe)['vars']['glibc-expected-commit']
+
+def results(data):
+    files = apk_files(data)
+    report = next(v for k, v in files.items() if k.endswith('/policy-report.json'))
+    summary = next(v for k, v in files.items() if k.endswith('glibc-testresults/tests.sum'))
+    return notes.statuses(summary.decode(errors='replace')), json.loads(report)
+
+def gather(artifacts, lock, records):
+    # Facts for notes.build: this build's evidence, the previous release's and
+    # Wolfi's advisories. Run once per release; stage() keeps what it wrote.
+    wolfi = lock['version'] + '-r' + str(lock['epoch'])
+    version = records[ARCHES[0]]['version']
+    previous = None
+    pointer = download(PUBLIC + 'current.json')
+    if pointer is not None:
+        pointer = json.loads(pointer)
+        if pointer['build_id'] == lock['build_id']:
+            raise ValueError('current.json already names this build')
+        old = download(PUBLIC + 'builds/' + pointer['build_id'] + '/release-notes.json')
+        old = json.loads(old) if old is not None else None
+        if old is not None:
+            origin = old['source']['wolfi_version']
+        else:
+            # Releases before notes name their Wolfi build in a provides.
+            entry = next(s for s in stanzas(download(PUBLIC + ARCHES[1] + '/APKINDEX.tar.gz'))
+                         if s['P'] == stream(pointer['version']) and s['V'] == pointer['version'])
+            origin = next((p.rsplit(':', 1)[1] for p in entry.get('p', '').split()
+                           if p.startswith('wolfi-origin:')), None)
+        previous = {'version': pointer['version'], 'build_id': pointer['build_id'],
+                    'commit': pointer['source_sha'], 'wolfi_version': origin,
+                    'wolfi_commit': old['source']['wolfi_commit'] if old is not None else None,
+                    'wolfi_inputs': old['wolfi_inputs'] if old is not None else None}
+    commits = glibc_commits = None
+    architectures = {}
+    for arch in ARCHES:
+        directory = artifacts / ('glibc-' + arch)
+        tests, report = results(next((directory / arch).glob('*-testresults-*.apk')).read_bytes())
+        before = None
+        if previous is not None:
+            old = download(PUBLIC + arch + '/' + stream(previous['version']) + '-testresults-' +
+                           previous['version'] + '.apk')
+            if old is not None:
+                before = results(old)[0]
+                previous.setdefault('glibc_commit', glibc_commit(old))
+        packages = [{'name': s['P'], 'version': s['V'], 'size': int(s['S'])}
+                    for s in stanzas((directory / arch / 'APKINDEX.tar.gz').read_bytes())]
+        architectures[arch] = {'tests': tests, 'previous_tests': before, 'report': report,
+                               'packages': sorted(packages, key=lambda p: p['name'])}
+    if previous is not None:
+        found = lookup('repos/' + os.environ['GITHUB_REPOSITORY'] + '/compare/' + previous['commit'] +
+                       '...' + os.environ['GITHUB_SHA'])
+        commits = subjects(found['commits']) if found else None
+        # Upstream glibc: the release-branch commits Wolfi's new pin brings, from
+        # the mirror source.py fetches first.
+        if previous.get('glibc_commit') == lock['glibc_commit']:
+            glibc_commits = []
+        elif previous.get('glibc_commit'):
+            found = lookup('repos/kraj/glibc/compare/' + previous['glibc_commit'] + '...' + lock['glibc_commit'])
+            glibc_commits = subjects(found['commits']) if found else None
+    secdb = json.loads(download(notes.SECDB))
+    policy = json.loads((ROOT / 'policy.json').read_text())
+    return {'version': version, 'build_id': lock['build_id'],
+            'date': datetime.datetime.now(datetime.timezone.utc).date().isoformat(),
+            'commit': os.environ['GITHUB_SHA'],
+            'run': os.environ.get('GITHUB_SERVER_URL', 'https://github.com') + '/' +
+                   os.environ['GITHUB_REPOSITORY'] + '/actions/runs/' + os.environ['GITHUB_RUN_ID'],
+            'source': {'glibc_commit': lock['glibc_commit'], 'wolfi_commit': lock['wolfi_commit'],
+                       'wolfi_version': wolfi, 'recipe': lock['recipe'], 'policy_revision': lock['revision']},
+            'repository': {'stable': PUBLIC, 'snapshot': PUBLIC + 'builds/' + lock['build_id'],
+                           'key_sha256': sha256(ROOT / 'release/packages.pub')},
+            'patches': (ROOT / 'patches/series').read_text().split(), 'wolfi_inputs': lock['sha256'],
+            'previous': previous, 'commits': commits, 'glibc_commits': glibc_commits,
+            'ceiling': policy['max_fail_per_mille'],
+            'security': notes.security(secdb, 'glibc-' + lock['version'],
+                                       previous['wolfi_version'] if previous else None, wolfi),
+            'architectures': architectures}
+
 def stage(artifacts, assets, lock, tag):
     assets.mkdir(parents=True, exist_ok=True)
     records = {}
@@ -191,23 +329,36 @@ def stage(artifacts, assets, lock, tag):
     (assets / 'SHA256SUMS').write_text(''.join(digest + '  ' + name + '\n' for name, digest in manifest['sha256'].items()))
     (assets / 'release.json').write_text(json.dumps(manifest, indent=2) + '\n')
     current = release(tag)
-    if current is None:
-        body = {'tag_name': tag, 'draft': True, 'make_latest': 'false',
-                'target_commitish': os.environ['GITHUB_SHA'],
-                'name': 'glibc ' + manifest['version'],
-                'body': 'Signed APKs for x86_64 and aarch64. Repository: ' + manifest['repository'] +
-            '\nBoth native builds, hardening probes, ABI checks and the downstream raw failure gate passed. '
-            'Every upstream failure is retained in the testresults APK.'}
-        with tempfile.TemporaryDirectory() as directory:
-            request = Path(directory) / 'release.json'
+    staged = {a['name'] for a in current['assets']} if current else set()
+    if 'release-notes.json' in staged:
+        # A retry keeps the notes first staged, whatever has changed since.
+        for name in NOTES:
+            run('gh', 'release', 'download', tag, '--pattern', name, '--clobber', '--dir', str(assets))
+    else:
+        made = notes.build(gather(artifacts, lock, records))
+        (assets / 'release-notes.json').write_bytes(notes.encode(made))
+        (assets / 'release-notes.md').write_text(notes.markdown(made))
+        (assets / 'release-notes.html').write_text(notes.page(made))
+    body = {'body': (assets / 'release-notes.md').read_text()}
+    with tempfile.TemporaryDirectory() as directory:
+        request = Path(directory) / 'release.json'
+        if current is None:
+            body.update({'tag_name': tag, 'draft': True, 'make_latest': 'false',
+                         'target_commitish': os.environ['GITHUB_SHA'], 'name': 'glibc ' + manifest['version']})
             request.write_text(json.dumps(body))
             current = json.loads(run('gh', 'api', '--method', 'POST',
                                      'repos/' + os.environ['GITHUB_REPOSITORY'] + '/releases',
                                      '--input', str(request)))
+        elif current.get('body') != body['body'] and current['draft']:
+            request.write_text(json.dumps(body))
+            run('gh', 'api', '--method', 'PATCH', 'repos/' + os.environ['GITHUB_REPOSITORY'] +
+                '/releases/' + str(current['id']), '--input', str(request))
     if not current['draft']:
         raise ValueError('Refusing to change a published release')
     existing = {a['name'] for a in current['assets']}
-    for path in [assets / ('glibc-' + a + '.tar.gz') for a in ARCHES] + [assets / 'SHA256SUMS', assets / 'release.json']:
+    # release.json is last: a staged draft with it is complete.
+    for path in [assets / ('glibc-' + a + '.tar.gz') for a in ARCHES] + [assets / 'SHA256SUMS'] + \
+            [assets / name for name in NOTES] + [assets / 'release.json']:
         if path.name in existing:
             with tempfile.TemporaryDirectory() as directory:
                 run('gh', 'release', 'download', tag, '--pattern', path.name, '--dir', directory)
@@ -228,7 +379,7 @@ def fetch(key, destination):
         return False
     raise RuntimeError(result.stderr)
 
-def upload(path, key, immutable=True):
+def upload(path, key, immutable=True, content_type=None):
     if immutable:
         with tempfile.TemporaryDirectory() as directory:
             previous = Path(directory) / 'object'
@@ -237,7 +388,8 @@ def upload(path, key, immutable=True):
                     raise ValueError('R2 object already exists with different bytes: ' + key)
                 return
     result = aws('put-object', '--bucket', BUCKET, '--key', PREFIX + key, '--body', str(path),
-                 '--cache-control', 'public, max-age=31536000, immutable' if immutable else 'no-cache')
+                 '--cache-control', 'public, max-age=31536000, immutable' if immutable else 'no-cache',
+                 *(['--content-type', content_type] if content_type else []))
     if result.returncode:
         raise RuntimeError(result.stderr)
 
@@ -320,6 +472,10 @@ def publish(assets, lock, tag, key=ROOT / 'build/keys/werewolf-packages.rsa'):
             upload(root / arch / 'APKINDEX.tar.gz', snapshot + arch + '/APKINDEX.tar.gz')
             upload(assets / ('glibc-' + arch + '.tar.gz'), snapshot + 'glibc-' + arch + '.tar.gz')
         upload(assets / 'SHA256SUMS', snapshot + 'SHA256SUMS')
+        # A draft staged before release notes existed has none.
+        noted = (assets / 'release-notes.json').is_file()
+        for name, kind in NOTES.items() if noted else ():
+            upload(assets / name, snapshot + name, content_type=kind)
         upload(assets / 'release.json', snapshot + 'release.json')
         # The stable repository machines follow: every published APK, kept, and one index.
         for arch, (index, added) in indexes.items():
@@ -330,9 +486,25 @@ def publish(assets, lock, tag, key=ROOT / 'build/keys/werewolf-packages.rsa'):
         current = Path(directory) / 'current'
         if not fetch('current.json', current) or json.loads(current.read_text())['run_number'] <= manifest['run_number']:
             upload(assets / 'release.json', 'current.json', immutable=False)
+    if noted:
+        update_index(json.loads((assets / 'release-notes.json').read_text()))
     # The public release is the completion marker, after both R2 repositories exist.
     run('gh', 'release', 'edit', tag, '--draft=false', '--latest=false')
     print(manifest['repository'])
+
+def update_index(made):
+    # The repository's front page lists every release with notes, newest first.
+    with tempfile.TemporaryDirectory() as directory:
+        listing = Path(directory) / 'releases.json'
+        existing = json.loads(listing.read_text()) if fetch('releases.json', listing) else []
+        if not isinstance(existing, list) or not all({'build_id', 'version'} <= set(r) for r in existing):
+            raise ValueError('releases.json is malformed')
+        entries = notes.releases(existing, made)
+        listing.write_bytes(notes.encode(entries))
+        upload(listing, 'releases.json', immutable=False, content_type='application/json')
+        page = Path(directory) / 'index.html'
+        page.write_text(notes.index(entries))
+        upload(page, 'index.html', immutable=False, content_type='text/html; charset=utf-8')
 
 def main():
     parser = argparse.ArgumentParser()

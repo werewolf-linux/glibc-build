@@ -8,14 +8,16 @@ import sys
 import tarfile
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
 import inputs
+import notes
 import publish
 import refresh
+from test_notes import facts
 
 class LatestInputs(unittest.TestCase):
     def recipe(self, root, version, source='1'*40, primary=True):
@@ -105,7 +107,8 @@ class ReleaseGate(unittest.TestCase):
                     self.assertTrue(request['draft'])
                     self.assertEqual('glibc 2.44-r16', request['name'])
                     self.assertEqual('false', request['make_latest'])
-                    current = {'draft': True, 'assets': []}
+                    self.assertIn('## Changes since 2.44-r20', request['body'])
+                    current = {'draft': True, 'assets': [], 'body': request['body'], 'id': 1}
                     return json.dumps(current)
                 if args[:3] == ('gh', 'release', 'upload'):
                     path = Path(args[-1])
@@ -120,9 +123,11 @@ class ReleaseGate(unittest.TestCase):
                 return ''
             environment = {'GITHUB_REPOSITORY': 'example/repo', 'GITHUB_SHA': '1' * 40,
                            'GITHUB_RUN_NUMBER': '1'}
+            gather = MagicMock(side_effect=lambda *a: facts())
             with patch.dict(os.environ, environment), \
                  patch.object(publish, 'validate', return_value={'version': '2.44-r16'}), \
                  patch.object(publish, 'release', side_effect=lambda tag: current), \
+                 patch.object(publish, 'gather', gather), \
                  patch.object(publish, 'run', side_effect=run):
                 with self.assertRaisesRegex(RuntimeError, 'transient upload'):
                     publish.stage(artifacts, assets, {'build_id': 'example'}, 'build-example')
@@ -141,9 +146,13 @@ class ReleaseGate(unittest.TestCase):
                                         for name, digest in manifest['sha256'].items()),
                                  uploaded['SHA256SUMS'].decode())
                 self.assertFalse(any(args[:3] == ('gh', 'release', 'edit') for args in calls))
+                names = [Path(args[-1]).name for args in calls if args[:3] == ('gh', 'release', 'upload')]
+                self.assertEqual(['release-notes.md', 'release-notes.html', 'release-notes.json', 'release.json'], names[-4:])
                 uploaded['glibc-x86_64.tar.gz'] = b'conflicting bytes'
                 with self.assertRaisesRegex(ValueError, 'different bytes'):
                     publish.stage(artifacts, assets, {'build_id': 'example'}, 'build-example')
+                # Once staged, notes are kept, never gathered again.
+                self.assertEqual(2, gather.call_count)
 
     def test_publish_uses_renamed_archives_through_completion(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -189,6 +198,56 @@ class ReleaseGate(unittest.TestCase):
                     publish.publish(assets, {'build_id': 'example'}, 'build-example')
                 upload.assert_not_called()
                 self.assertEqual(1, run.call_count)
+
+    def test_public_reads_name_themselves_and_treat_only_404_as_absent(self):
+        response = MagicMock()
+        response.__enter__.return_value.read.return_value = b'body'
+        with patch.object(publish.urllib.request, 'urlopen', return_value=response) as urlopen:
+            self.assertEqual(b'body', publish.download('https://dist.example/current.json'))
+            self.assertIn('glibc-build-publish', urlopen.call_args.args[0].get_header('User-agent'))
+        missing = publish.urllib.error.HTTPError('https://dist.example/x', 404, 'Not Found', {}, None)
+        with patch.object(publish.urllib.request, 'urlopen', side_effect=missing):
+            self.assertIsNone(publish.download('https://dist.example/x'))
+        refused = publish.urllib.error.HTTPError('https://dist.example/x', 403, 'Forbidden', {}, None)
+        with patch.object(publish.urllib.request, 'urlopen', side_effect=refused), \
+             patch.object(publish.time, 'sleep'), self.assertRaises(publish.urllib.error.HTTPError):
+            publish.download('https://dist.example/x')
+
+    def test_publish_puts_notes_beside_the_snapshot_and_lists_the_release(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            assets = root / 'assets'
+            assets.mkdir()
+            digests = {}
+            for arch in publish.ARCHES:
+                (root / arch / arch).mkdir(parents=True)
+                (root / arch / arch / 'APKINDEX.tar.gz').write_bytes(b'signed index')
+                publish.archive(root / arch, assets / ('glibc-' + arch + '.tar.gz'))
+                digests['glibc-' + arch + '.tar.gz'] = inputs.sha256(assets / ('glibc-' + arch + '.tar.gz'))
+            (assets / 'release.json').write_text(json.dumps({'build_id': 'example', 'source_sha': '1' * 40,
+                                                             'run_number': 1, 'sha256': digests,
+                                                             'repository': publish.PUBLIC + 'builds/example'}))
+            (assets / 'SHA256SUMS').write_text('')
+            made = notes.build(facts())
+            (assets / 'release-notes.json').write_bytes(notes.encode(made))
+            (assets / 'release-notes.md').write_text(notes.markdown(made))
+            (assets / 'release-notes.html').write_text(notes.page(made))
+            order, uploads = [], {}
+            def upload(path, key, immutable=True, content_type=None):
+                order.append(key)
+                uploads[key] = (Path(path).read_bytes(), immutable, content_type)
+            with patch.object(publish, 'run', side_effect=lambda *args: order.append(args[:3])), \
+                 patch.object(publish, 'validate'), \
+                 patch.object(publish, 'stable', side_effect=lambda p, a, k, w: (p / a / 'APKINDEX.tar.gz', [])), \
+                 patch.object(publish, 'fetch', return_value=False), \
+                 patch.object(publish, 'upload', side_effect=upload):
+                publish.publish(assets, {'build_id': 'example'}, 'build-example')
+            for name, kind in publish.NOTES.items():
+                self.assertEqual(((assets / name).read_bytes(), True, kind), uploads['builds/example/' + name])
+            listing, immutable, kind = uploads['releases.json']
+            self.assertEqual(([notes.entry(made)], False, 'application/json'), (json.loads(listing), immutable, kind))
+            self.assertEqual('text/html; charset=utf-8', uploads['index.html'][2])
+            self.assertLess(order.index('index.html'), order.index(('gh', 'release', 'edit')))
 
     def test_control_signature_is_required_and_tampering_is_rejected(self):
         def member(files):
