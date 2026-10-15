@@ -35,6 +35,9 @@ def main():
         assert len(stack) == 1 and 'RW ' in stack[0] and 'RWE' not in stack[0], path
         assert 'GNU_RELRO' in headers, path
         assert 'BIND_NOW' in dynamic or 'Flags: NOW' in dynamic, path
+        # Headers and read-only data are not executable (-z separate-code).
+        loads = [line.split() for line in headers.splitlines() if line.split()[:1] == ['LOAD']]
+        assert loads and 'E' not in ''.join(loads[0][6:-1]), path
         evidence['elf'][str(path.relative_to(build))] = {
             'program_headers': headers, 'dynamic_tags': dynamic,
             'notes': subprocess.check_output(['readelf', '-nW', str(path)], text=True)}

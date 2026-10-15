@@ -3,12 +3,19 @@
 import copy
 import json
 from pathlib import Path
+import re
 import shlex
 import shutil
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 REMOVED = {'nscd', 'nss-db', 'nss-hesiod', 'sotruss', 'pcprofiledump', 'glibc-tracing'}
+HARDENING = ['CFLAGS += -fstrict-flex-arrays=3', 'LDFLAGS.so += -Wl,-z,separate-code',
+             'LDFLAGS-rtld += -Wl,-z,separate-code']
+MIN_KERNEL = '6.18'
+
+def version(text):
+    return tuple(int(x) for x in text.split('.'))
 APK_TEST_ADAPTER = '''mv /usr/bin/apk /usr/bin/apk.real
 for app in info add del version update; do ln -s apk.real "/usr/bin/apk_$app"; done
 cat > /usr/bin/apk <<'NEUTERED_APK'
@@ -81,6 +88,16 @@ def derive():
         "echo 'override rtld-prefix =' >> configparms\n"
     configure['runs'] += "echo 'include $(common-objpfx)../tests/harness.mk' >> configparms.base\n" + \
         "echo 'include $(common-objpfx)../tests/harness.mk' >> configparms\n"
+    # Beyond Wolfi at no run-time cost (docs/design/compiler-hardening.md):
+    # fortify bounds trailing arrays by their declared size, and no library or
+    # loader maps its headers and read-only data executable, as x86 already does.
+    for line in HARDENING:
+        configure['runs'] += f"echo '{line}' >> configparms.base\necho '{line}' >> configparms\n"
+    # Werewolf boots Linux 6.18 or later: glibc drops fallbacks for older kernels.
+    kernel = re.findall(r'--enable-kernel=([0-9.]+)', configure['runs'])
+    assert len(kernel) == 1, 'review changed upstream minimum kernel'
+    if version(kernel[0]) < version(MIN_KERNEL):
+        configure['runs'] = configure['runs'].replace('--enable-kernel='+kernel[0], '--enable-kernel='+MIN_KERNEL)
     test = next(x for x in pipeline if x.get('name') == 'Run the glibc testsuite')
     assert 'make -C build' in test['runs']
     # Retain Wolfi's full suite and its gates; hardcoded test paths avoid a

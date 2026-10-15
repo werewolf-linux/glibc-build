@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+import re
 import shutil
 import sys
 import tempfile
@@ -104,6 +105,31 @@ class Derivation(unittest.TestCase):
             shutil.copytree(ROOT/'profile', root/'profile')
             with patch.object(derive, 'ROOT', root), self.assertRaisesRegex(ValueError, 'Review changed upstream glibc-tracing'):
                 derive.derive()
+
+    def configure(self, result):
+        return next(x['runs'] for x in result['pipeline'] if x.get('name') == 'Configure glibc')
+
+    def test_hardening_beyond_wolfi_survives_configparms_rebuilds(self):
+        configure = self.configure(derive.derive())
+        for line in derive.HARDENING:
+            for target in ['configparms.base', 'configparms']:
+                self.assertIn(f"echo '{line}' >> {target}\n", configure)
+        self.assertEqual(['6.18'], re.findall(r'--enable-kernel=([0-9.]+)', configure))
+
+    def test_a_newer_upstream_minimum_kernel_is_kept(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root/'build/inputs').mkdir(parents=True)
+            upstream = yaml.safe_load((ROOT/'build/inputs/upstream.yaml').read_text())
+            configure = next(x for x in upstream['pipeline'] if x.get('name') == 'Configure glibc')
+            configure['runs'] = re.sub(r'--enable-kernel=[0-9.]+', '--enable-kernel=7.1', configure['runs'])
+            (root/'build/inputs/upstream.yaml').write_text(yaml.safe_dump(upstream))
+            shutil.copyfile(ROOT/'build/inputs/upstream.lock.json', root/'build/inputs/upstream.lock.json')
+            shutil.copyfile(ROOT/'policy.json', root/'policy.json')
+            shutil.copytree(ROOT/'profile', root/'profile')
+            with patch.object(derive, 'ROOT', root):
+                result = derive.derive()
+            self.assertEqual(['7.1'], re.findall(r'--enable-kernel=([0-9.]+)', self.configure(result)))
 
     def test_every_package_names_the_wolfi_source_it_rebuilds(self):
         upstream = yaml.safe_load((ROOT/'build/inputs/upstream.yaml').read_text())['package']

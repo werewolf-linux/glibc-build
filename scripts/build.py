@@ -9,10 +9,12 @@ import json
 import os
 from pathlib import Path
 import platform
+import re
 import shutil
 import subprocess
 import threading
 import yaml
+from derive import MIN_KERNEL
 
 ROOT = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser(description=__doc__)
@@ -40,6 +42,11 @@ def sha256(path):
     return digest.hexdigest()
 
 if runner == 'bubblewrap':
+    # The test suite runs on this kernel, and the built glibc refuses older ones.
+    host = tuple(int(x) for x in re.match(r'(\d+)\.(\d+)', platform.release()).groups())
+    if host < tuple(int(x) for x in MIN_KERNEL.split('.')):
+        raise SystemExit(f'host kernel {platform.release()} is older than glibc minimum {MIN_KERNEL}')
+    manifest['kernel'] = platform.release()
     executable = Path(shutil.which('bwrap')).resolve()
     manifest['bubblewrap_sha256'] = sha256(executable)
     profile = executable.with_suffix('.apparmor')

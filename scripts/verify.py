@@ -9,7 +9,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
-from derive import derive
+from derive import derive, version
 from inputs import verify, INPUTS
 
 def main():
@@ -23,7 +23,12 @@ def main():
     assert 'git' in derived['pipeline'][0]['needs']['packages'], 'source fetch requires Git in the guest'
     configure = lambda c: next(x['runs'] for x in c['pipeline'] if x.get('name') == 'Configure glibc')
     flags = lambda s: set(re.findall(r'--[a-zA-Z0-9_-]+(?:=[^\s\\]+)?', s))
-    assert flags(configure(upstream)) <= flags(configure(derived)), 'upstream configure flags removed'
+    kept = {f for f in flags(configure(upstream)) if not f.startswith('--enable-kernel=')}
+    assert kept <= flags(configure(derived)), 'upstream configure flags removed'
+    # The minimum kernel may only rise: it removes fallbacks, never protections.
+    kernels = lambda s: [version(v) for v in re.findall(r'--enable-kernel=([0-9.]+)', s)]
+    assert len(kernels(configure(derived))) == 1, 'one minimum kernel'
+    assert kernels(configure(derived)) >= kernels(configure(upstream)), 'minimum kernel lowered'
     assert derived['environment'] == upstream['environment'], 'upstream compiler environment changed'
     packages = derived['environment']['contents']['packages']
     assert 'openssf-compiler-options' in packages and 'build-base' in packages
