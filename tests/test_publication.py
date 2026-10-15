@@ -91,7 +91,7 @@ class ReleaseGate(unittest.TestCase):
             root = Path(directory)
             artifacts, assets = root / 'artifacts', root / 'assets'
             for arch in publish.ARCHES:
-                packages = artifacts / ('glibc-neutered-' + arch)
+                packages = artifacts / ('glibc-' + arch)
                 packages.mkdir(parents=True)
                 (packages / 'example.apk').write_bytes(arch.encode())
             current = None
@@ -103,12 +103,13 @@ class ReleaseGate(unittest.TestCase):
                 if args[:3] == ('gh', 'api', '--method'):
                     request = json.loads(Path(args[-1]).read_text())
                     self.assertTrue(request['draft'])
+                    self.assertEqual('glibc 2.44-r16', request['name'])
                     self.assertEqual('false', request['make_latest'])
                     current = {'draft': True, 'assets': []}
                     return json.dumps(current)
                 if args[:3] == ('gh', 'release', 'upload'):
                     path = Path(args[-1])
-                    if path.name == 'glibc-neutered-aarch64.tar.gz' and fail:
+                    if path.name == 'glibc-aarch64.tar.gz' and fail:
                         fail = False
                         raise RuntimeError('transient upload failure')
                     uploaded[path.name] = path.read_bytes()
@@ -126,17 +127,68 @@ class ReleaseGate(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, 'transient upload'):
                     publish.stage(artifacts, assets, {'build_id': 'example'}, 'build-example')
                 self.assertNotIn('release.json', uploaded)
-                original = uploaded['glibc-neutered-x86_64.tar.gz']
-                os.utime(artifacts / 'glibc-neutered-x86_64' / 'example.apk', (99, 99))
+                original = uploaded['glibc-x86_64.tar.gz']
+                os.utime(artifacts / 'glibc-x86_64' / 'example.apk', (99, 99))
                 publish.stage(artifacts, assets, {'build_id': 'example'}, 'build-example')
-                self.assertEqual(original, uploaded['glibc-neutered-x86_64.tar.gz'])
+                self.assertEqual(original, uploaded['glibc-x86_64.tar.gz'])
                 self.assertEqual(1, sum(args[:3] == ('gh', 'api', '--method') for args in calls))
                 self.assertEqual('release.json', calls[-1][-1].split('/')[-1])
                 self.assertEqual('gh', calls[-1][0])
+                manifest = json.loads(uploaded['release.json'])
+                self.assertEqual({'glibc-' + arch + '.tar.gz' for arch in publish.ARCHES},
+                                 set(manifest['sha256']))
+                self.assertEqual(''.join(digest + '  ' + name + '\n'
+                                        for name, digest in manifest['sha256'].items()),
+                                 uploaded['SHA256SUMS'].decode())
                 self.assertFalse(any(args[:3] == ('gh', 'release', 'edit') for args in calls))
-                uploaded['glibc-neutered-x86_64.tar.gz'] = b'conflicting bytes'
+                uploaded['glibc-x86_64.tar.gz'] = b'conflicting bytes'
                 with self.assertRaisesRegex(ValueError, 'different bytes'):
                     publish.stage(artifacts, assets, {'build_id': 'example'}, 'build-example')
+
+    def test_publish_uses_renamed_archives_through_completion(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            assets = root / 'assets'
+            assets.mkdir()
+            digests = {}
+            for arch in publish.ARCHES:
+                packages = root / arch
+                (packages / arch).mkdir(parents=True)
+                (packages / arch / 'APKINDEX.tar.gz').write_bytes(b'signed index')
+                name = 'glibc-' + arch + '.tar.gz'
+                publish.archive(packages, assets / name)
+                digests[name] = inputs.sha256(assets / name)
+            manifest = {'build_id': 'example', 'source_sha': '1' * 40,
+                        'run_number': 1, 'repository': publish.PUBLIC + 'builds/example',
+                        'sha256': digests}
+            (assets / 'release.json').write_text(json.dumps(manifest))
+            (assets / 'SHA256SUMS').write_text(''.join(
+                digest + '  ' + name + '\n' for name, digest in digests.items()))
+            def stable(packages, arch, key, work):
+                self.assertTrue((packages / arch / 'APKINDEX.tar.gz').is_file())
+                return packages / arch / 'APKINDEX.tar.gz', []
+            with patch.object(publish, 'run') as run, \
+                 patch.object(publish, 'validate') as validate, \
+                 patch.object(publish, 'stable', side_effect=stable), \
+                 patch.object(publish, 'fetch', return_value=False), \
+                 patch.object(publish, 'upload') as upload:
+                publish.publish(assets, {'build_id': 'example'}, 'build-example')
+                self.assertEqual(2, validate.call_count)
+                for arch in publish.ARCHES:
+                    name = 'glibc-' + arch + '.tar.gz'
+                    self.assertIn(((assets / name, 'builds/example/' + name), {}),
+                                  upload.call_args_list)
+                self.assertEqual('current.json', upload.call_args.args[1])
+                self.assertEqual(('gh', 'release', 'edit', 'build-example',
+                                  '--draft=false', '--latest=false'), run.call_args.args)
+                run.reset_mock()
+                upload.reset_mock()
+                manifest['sha256'].pop('glibc-aarch64.tar.gz')
+                (assets / 'release.json').write_text(json.dumps(manifest))
+                with self.assertRaisesRegex(ValueError, 'Both native architectures'):
+                    publish.publish(assets, {'build_id': 'example'}, 'build-example')
+                upload.assert_not_called()
+                self.assertEqual(1, run.call_count)
 
     def test_control_signature_is_required_and_tampering_is_rejected(self):
         def member(files):

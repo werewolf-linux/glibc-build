@@ -181,9 +181,9 @@ def stage(artifacts, assets, lock, tag):
     assets.mkdir(parents=True, exist_ok=True)
     records = {}
     for arch in ARCHES:
-        directory = artifacts / ('glibc-neutered-' + arch)
+        directory = artifacts / ('glibc-' + arch)
         records[arch] = validate(directory, arch, lock)
-        archive(directory, assets / ('glibc-neutered-' + arch + '.tar.gz'))
+        archive(directory, assets / ('glibc-' + arch + '.tar.gz'))
     manifest = {'build_id': lock['build_id'], 'version': records[ARCHES[0]]['version'],
                 'source_sha': os.environ['GITHUB_SHA'], 'run_number': int(os.environ['GITHUB_RUN_NUMBER']),
                 'repository': PUBLIC + 'builds/' + lock['build_id'],
@@ -194,7 +194,7 @@ def stage(artifacts, assets, lock, tag):
     if current is None:
         body = {'tag_name': tag, 'draft': True, 'make_latest': 'false',
                 'target_commitish': os.environ['GITHUB_SHA'],
-                'name': 'glibc-neutered ' + manifest['version'],
+                'name': 'glibc ' + manifest['version'],
                 'body': 'Signed APKs for x86_64 and aarch64. Repository: ' + manifest['repository'] +
             '\nBoth native builds, hardening probes, ABI checks and the downstream raw failure gate passed. '
             'Every upstream failure is retained in the testresults APK.'}
@@ -207,7 +207,7 @@ def stage(artifacts, assets, lock, tag):
     if not current['draft']:
         raise ValueError('Refusing to change a published release')
     existing = {a['name'] for a in current['assets']}
-    for path in [assets / ('glibc-neutered-' + a + '.tar.gz') for a in ARCHES] + [assets / 'SHA256SUMS', assets / 'release.json']:
+    for path in [assets / ('glibc-' + a + '.tar.gz') for a in ARCHES] + [assets / 'SHA256SUMS', assets / 'release.json']:
         if path.name in existing:
             with tempfile.TemporaryDirectory() as directory:
                 run('gh', 'release', 'download', tag, '--pattern', path.name, '--dir', directory)
@@ -297,7 +297,7 @@ def publish(assets, lock, tag, key=ROOT / 'build/keys/werewolf-packages.rsa'):
     manifest = json.loads((assets / 'release.json').read_text())
     if manifest['build_id'] != lock['build_id'] or not re.fullmatch('[0-9a-f]{40}', manifest['source_sha']):
         raise ValueError('Release manifest does not match captured inputs')
-    if set(manifest['sha256']) != {'glibc-neutered-' + a + '.tar.gz' for a in ARCHES}:
+    if set(manifest['sha256']) != {'glibc-' + a + '.tar.gz' for a in ARCHES}:
         raise ValueError('Both native architectures are required')
     snapshot = 'builds/' + lock['build_id'] + '/'
     with tempfile.TemporaryDirectory() as directory:
@@ -307,7 +307,7 @@ def publish(assets, lock, tag, key=ROOT / 'build/keys/werewolf-packages.rsa'):
         for name, digest in manifest['sha256'].items():
             if sha256(assets / name) != digest:
                 raise ValueError('Release archive hash mismatch')
-            arch = next(a for a in ARCHES if name == 'glibc-neutered-' + a + '.tar.gz')
+            arch = next(a for a in ARCHES if name == 'glibc-' + a + '.tar.gz')
             roots[arch] = work / arch
             with tarfile.open(assets / name) as archive:
                 archive.extractall(roots[arch], filter='data')
@@ -318,7 +318,7 @@ def publish(assets, lock, tag, key=ROOT / 'build/keys/werewolf-packages.rsa'):
             for apk in sorted((root / arch).glob('*.apk')):
                 upload(apk, snapshot + arch + '/' + apk.name)
             upload(root / arch / 'APKINDEX.tar.gz', snapshot + arch + '/APKINDEX.tar.gz')
-            upload(assets / ('glibc-neutered-' + arch + '.tar.gz'), snapshot + 'glibc-neutered-' + arch + '.tar.gz')
+            upload(assets / ('glibc-' + arch + '.tar.gz'), snapshot + 'glibc-' + arch + '.tar.gz')
         upload(assets / 'SHA256SUMS', snapshot + 'SHA256SUMS')
         upload(assets / 'release.json', snapshot + 'release.json')
         # The stable repository machines follow: every published APK, kept, and one index.

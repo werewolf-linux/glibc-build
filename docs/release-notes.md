@@ -1,6 +1,6 @@
 These packages derive from Wolfi’s latest captured stable glibc recipe plus Werewolf’s fixed policy patches. Both native builds, hardening probes, complete upstream suites, ABI and installed-package checks must pass before publication. The downstream raw failure ceiling is 5.5%, replacing Wolfi’s 2%; no failures are hidden or reclassified.
 
-Archives include signed APKs/indexes, the Werewolf signing public key, patched source, input/tool pins, ordered patches and hashes. Authenticate the trust root independently; these releases use Werewolf’s existing APK key rather than ephemeral CI keys.
+Releases are titled `glibc <version>` with `glibc-x86_64.tar.gz` and `glibc-aarch64.tar.gz` archives. Archives include signed APKs/indexes, the Werewolf signing public key, patched source, input/tool pins, ordered patches and hashes. Authenticate the trust root independently; these releases use Werewolf’s existing APK key rather than ephemeral CI keys. APK names and repository URLs retain `glibc-neutered` for existing consumers.
 
 Werewolf machines follow the stable repository `https://dist.werewolf-linux.org/apk/glibc-neutered/<arch>/`, which keeps every published build. Each build also has an immutable snapshot under `https://dist.werewolf-linux.org/apk/glibc-neutered/builds/<input-hash>/<arch>/`. `current.json` identifies the complete snapshot. GitHub releases contain both architecture archives and checksums. Werewolf machines install a new build at their next update check; their trial boot still decides whether it is kept.
 

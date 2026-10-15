@@ -45,7 +45,7 @@ Preparation and Melange use the same `source.py` fetcher. It fetches only Wolfi'
 
 The successful build record includes hashes, source/recipe/tool pins, patched source and public signing key. The publisher verifies these records, APK control signatures, payload hashes, signed index coverage and matching versions/architectures. Ephemeral CI keys cannot be published.
 
-Validated archives are first uploaded to a GitHub draft tagged `build-<full-input-hash>`. Its manifest is uploaded last. A complete draft lets the next check resume publication using the original bytes, including after a documentation-only commit. Partial staging failures require rerunning the original failed job.
+Validated archives, `glibc-x86_64.tar.gz` and `glibc-aarch64.tar.gz`, are first uploaded to a GitHub draft titled `glibc <version>` and tagged `build-<full-input-hash>`. Its manifest is uploaded last. A complete draft lets the next check resume publication using the original bytes, including after a documentation-only commit. Partial staging failures require rerunning the original failed job. APK names and repository URLs retain `glibc-neutered` for existing consumers.
 
 Draft discovery uses GitHub's paginated release listing, which includes drafts for callers with push access; the published-tag endpoint does not. Creation uses the returned draft object directly. Archive timestamps and owner metadata are normalized, so retrying staging from the original artifacts produces identical bytes. Existing assets must match; nothing is overwritten.
 
