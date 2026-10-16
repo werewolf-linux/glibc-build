@@ -18,6 +18,15 @@ REMOVED_OPTION = '--enable-loadable-sqlite-extensions'
 CLONE = 'Clone patched source for no-GIL and JIT builds'
 ALLOW = 'Allow every runtime-hardening group in the build guest only'
 PROBE_PY, PROBE_SH = 'WEREWOLF_PROBE_PY', 'WEREWOLF_PROBE_SH'
+# Every build-guest group, also granted in the test environment so Wolfi's own
+# tests (which run `python -c`, scripts and pickle) pass; the probe clears them.
+GROUPS = ['native', 'deserialize', 'inline', 'writable-source', 'environment']
+
+def grant_all():
+    return ('mkdir -p /etc/runtime-hardening/allow/all/python\n'
+            'for f in ' + ' '.join(GROUPS) + '; do\n'
+            '  : > /etc/runtime-hardening/allow/all/python/$f\n'
+            'done\n')
 
 def checkout(config):
     """The index of the recipe's one git-checkout step."""
@@ -81,10 +90,7 @@ def derive(pkg, config, lock):
     # grant only the groups lib/allow.zig defines, never `environment`.
     pipeline[patched[-1] + 1:patched[-1] + 1] = [
         patching.step(PATCHES),
-        {'name': ALLOW, 'runs': 'mkdir -p /etc/runtime-hardening/allow/all/python\n'
-                                'for f in native deserialize inline writable-source environment; do\n'
-                                '  : > /etc/runtime-hardening/allow/all/python/$f\n'
-                                'done\n'}]
+        {'name': ALLOW, 'runs': grant_all()}]
     options = config['vars']['python-config']
     line = re.compile(r'^[ \t]*' + re.escape(REMOVED_OPTION) + r'[ \t]*\\\n', re.M)
     config['vars']['python-config'], count = line.subn('', options)
@@ -101,6 +107,18 @@ def derive(pkg, config, lock):
     config['test']['pipeline'].append({'name': 'Werewolf protections hold, and allowances take each back',
                                        'runs': probe(pkg)})
     config['update'] = {'enabled': False}
+    return config
+
+def test_recipe(config, repository):
+    # Wolfi's tests, and each subpackage's, run `python -c`, scripts and pickle,
+    # so grant every group in every test environment; the probe (in the main
+    # test) clears them and proves deny-by-default on its own. Done only when
+    # tests run, so the derived recipe stays a faithful copy of Wolfi's.
+    grant = {'name': 'Grant every group for the suite (the probe clears them)', 'runs': grant_all()}
+    for section in [config] + config.get('subpackages', []):
+        test = section.get('test')
+        if test and test.get('pipeline'):
+            test['pipeline'].insert(0, dict(grant))
     return config
 
 def check(pkg, upstream, derived):

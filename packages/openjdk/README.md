@@ -22,16 +22,19 @@ install steps, every subpackage and package test.
   4. `ObjectInputStream` refuses every class but primitive arrays, as the filter `!*`
      would, unless `deserialize` is allowed. No filter, filter factory or
      `jdk.serialFilter` takes this back.
-  5. `sun.misc.Unsafe` memory access is denied unless `unsafe` is allowed, whatever
-     `--sun-misc-unsafe-memory-access` says.
-  6. Illegal native access (JNI, FFM restricted methods) is denied unless
-     `native-access` is allowed, whatever `--illegal-native-access` says, and
-     `--enable-native-access` grants nothing without it. A JAR manifest's
-     `Enable-Native-Access` still grants, as the image's own jars may.
+  5. `native` gates reaching native code or memory as one group: `sun.misc.Unsafe`
+     memory access is denied whatever `--sun-misc-unsafe-memory-access` says, and
+     illegal
+     native access (JNI, FFM restricted methods) is denied whatever
+     `--illegal-native-access` says, with `--enable-native-access` granting nothing. A
+     JAR manifest's `Enable-Native-Access` still grants, as the image's own jars may.
 - **Tests**: Wolfi's tests, then `tests/probe.sh` with `tests/Probe.java`, which check
   each protection, that the environment and argv lift none, that a manifest still
   grants native access, and that each allowance, and only a regular file, takes back
   what it names and nothing else.
+- **Allowances**: a capability group is an empty file, never a symlink, at
+  `/etc/runtime-hardening/allow/<ns>/java/GROUP` or `.../all/java/GROUP`, read with
+  `Files.isRegularFile(NOFOLLOW_LINKS)`. `<ns>` is the service from `/proc/self/cgroup`.
 - **Packaging**: epoch `1000 × policy.json revision + Wolfi epoch` sorts above every
   Wolfi rebuild; each package provides `wolfi-origin:openjdk-27:VERSION-rEPOCH` for CVE
   matching. Derivation stops for review when the checkout, the patch order, the test
@@ -41,19 +44,20 @@ install steps, every subpackage and package test.
 
 - `JAVA_TOOL_OPTIONS`, `_JAVA_OPTIONS`, `JDK_JAVA_OPTIONS` and `JDK_ALTERNATE_VM` have
   no effect. Put the options on the command line or in an `@argfile` the command names.
-- Native code from the class path needs `allow: [java:native-access]` in `form.yaml`, or
-  an `Enable-Native-Access` manifest entry. Kafka, OpenSearch, Netty's native
-  transports and zstd-jni users need one or the other.
-- Libraries that use `sun.misc.Unsafe` memory access (older Netty, Kryo, Chronicle,
-  some serializers) need `allow: [java:unsafe]`.
+- `--enable-native-access` on the command line grants nothing; use
+  `allow: [java:native]` or an `Enable-Native-Access` manifest entry.
+- Libraries that reach native code or memory, `sun.misc.Unsafe`, the Foreign Function
+  and Memory API or JNI (older Netty, Kryo, Chronicle, Kafka, zstd-jni), need
+  `allow: [java:native]`.
 - RMI, JMX remoting, and anything that reads Java serialization need
   `allow: [java:deserialize]`.
 - `jcmd`, `jstack`, `jmap` and attach agents need the target started with
   `-XX:-DisableAttachMechanism`; that flag opens attach for that process alone.
 
-Allowances are build-time: `allow: [java:NAME]` writes
-`/etc/werewolf/allow/java/NAME` on the read-only root. Packages hold nothing under
-`/etc/werewolf`.
+`inline` (jshell) and `writable-source` (a class or jar on a writable mount) are not
+yet gated for Java: jshell goes with the jlink JRE and writable code with the phase-2
+`defineClass` seal, both deferred (see the design doc). Packages hold nothing under
+`/etc/runtime-hardening`.
 
 ## Still read from the environment
 

@@ -14,7 +14,7 @@ diff --git a/src/java.base/share/classes/jdk/internal/module/ModuleBootstrap.jav
 -        return ILLEGAL_NATIVE_ACCESS;
 +        // Werewolf: denied unless the image allows java:native-access,
 +        // whatever --illegal-native-access says.
-+        return jdk.internal.misc.WerewolfAllowance.allowed("native-access")
++        return jdk.internal.misc.WerewolfAllowance.allowed("native")
 +                ? ILLEGAL_NATIVE_ACCESS : IllegalNativeAccess.DENY;
      }
  
@@ -26,7 +26,7 @@ diff --git a/src/java.base/share/classes/jdk/internal/module/ModuleBootstrap.jav
 -        addEnableNativeAccess(layer, USER_NATIVE_ACCESS_MODULES, shouldWarn);
 +        // Werewolf: --enable-native-access grants nothing unless the image
 +        // allows java:native-access; a JAR manifest still does.
-+        if (jdk.internal.misc.WerewolfAllowance.allowed("native-access")) {
++        if (jdk.internal.misc.WerewolfAllowance.allowed("native")) {
 +            addEnableNativeAccess(layer, USER_NATIVE_ACCESS_MODULES, shouldWarn);
 +        }
          addEnableNativeAccess(layer, JDK_NATIVE_ACCESS_MODULES, false);

@@ -13,7 +13,7 @@ diff --git a/src/jdk.unsupported/share/classes/sun/misc/Unsafe.java b/src/jdk.un
          static MemoryAccessOption value() {
 +            // Werewolf: denied unless the image allows java:unsafe, whatever
 +            // --sun-misc-unsafe-memory-access says.
-+            if (!jdk.internal.misc.WerewolfAllowance.allowed("unsafe")) {
++            if (!jdk.internal.misc.WerewolfAllowance.allowed("native")) {
 +                return MemoryAccessOption.DENY;
 +            }
              String value = VM.getSavedProperty("sun.misc.unsafe.memory.access");

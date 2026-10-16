@@ -1,52 +1,79 @@
 #!/bin/sh
-# probe.sh PROBE holds the installed php to the protections patches/series
-# compiles in, then takes each back with an allowance and sees it return.
-# The package test runs it as root, with php.ini-production installed and
-# /etc/werewolf/allow/php free to use (scripts/derive.py embeds it).
+# probe.sh PROBE: hold the installed php to the protections in patches/series,
+# then grant each capability group and see it return. The package test runs it
+# as root with /etc/runtime-hardening/allow free to use. PHP names another
+# binary and ALLOW another tree, for a dev build off the read-only root.
 set -eu
 probe=$1
-allow=/etc/werewolf/allow/php
+php=${PHP:-php}
+allowdir=${ALLOW:-/etc/runtime-hardening/allow}
+base=$allowdir/all/php
 work=$(mktemp -d)
-trap 'rm -rf "$work" "$allow"' EXIT
+trap 'rm -rf "$work" "$allowdir"' EXIT
+
+grant() { mkdir -p "$base"; : > "$base/$1"; }
+revoke() { rm -f "$base/$1"; }
 
 expect() {
-	name=$1
-	want=$2
-	shift 2
-	got=$("$@" 2>"$work/stderr")
-	if [ "$got" != "$want" ]; then
-		echo "probe: FAIL: $name" >&2
-		echo "  want $want" >&2
-		echo "  got  $got" >&2
-		cat "$work/stderr" >&2
+	name=$1; want=$2; shift 2
+	got=$("$@" 2>"$work/err") || true
+	if [ "$got" = "$want" ]; then echo "probe: ok: $name"; return; fi
+	echo "probe: FAIL: $name" >&2
+	echo "  want $want" >&2
+	echo "  got  $got" >&2
+	cat "$work/err" >&2
+	exit 1
+}
+
+refuse() {
+	name=$1; token=$2; shift 2
+	if "$@" >/dev/null 2>"$work/err"; then
+		echo "probe: FAIL: $name ran" >&2
+		exit 1
+	fi
+	if ! grep -q "$token" "$work/err"; then
+		echo "probe: FAIL: $name refusal does not name $token" >&2
+		cat "$work/err" >&2
 		exit 1
 	fi
 	echo "probe: ok: $name"
 }
 
-closed='{"functions":[],"unserialize":"__PHP_Incomplete_Class","unserialize_all":"__PHP_Incomplete_Class","unserialize_named":"stdClass","phar_wrapper":false,"allow_url_include":false,"opcache_file_cache":"","memory_limit":"128M"}'
-rm -rf "$allow"
-expect 'closed without allowances' "$closed" php "$probe"
+echo '<?php echo "script ran";' > "$work/child.php"
+report() { "$php" "$probe"; }
 
-# Neither the environment, php.ini nor argv opens them again.
-mkdir "$work/ini"
-printf 'memory_limit = 7M\nallow_url_include = 1\ndisable_functions =\n' >"$work/ini/php.ini"
-expect 'PHPRC is ignored' "$closed" env PHPRC="$work/ini" php "$probe"
-expect 'PHP_INI_SCAN_DIR is ignored' "$closed" env PHP_INI_SCAN_DIR="$work/ini" php "$probe"
-expect 'php.ini and argv cannot lift the floor' "$closed" \
-	php -d disable_functions= -d allow_url_include=1 -d opcache.file_cache="$work/cache" "$probe"
+# The probe is a script on a writable mount, so running it needs writable-source;
+# that is the harness enabler, tested on its own with a child below.
+rm -rf "$allowdir"
+grant writable-source
 
-# Each allowance takes back what it names, and nothing else.
-mkdir -p "$allow"
-: >"$allow/exec"
-: >"$allow/unserialize"
-: >"$allow/phar"
-expect 'allowances take back exec, unserialize and phar' \
-	'{"functions":["exec"],"unserialize":"stdClass","unserialize_all":"stdClass","unserialize_named":"stdClass","phar_wrapper":true,"allow_url_include":false,"opcache_file_cache":"","memory_limit":"128M"}' \
-	php "$probe"
+closed='{"deserialize":false,"exec":false,"native":false,"phar":false}'
+expect 'closed: no exec, native, deserialize or phar' "$closed" report
 
-# A link is not an allowance, even to a file: lock times will be links.
-rm -f "$allow"/*
-: >"$work/target"
-ln -s "$work/target" "$allow/system"
-expect 'a link is not an allowance' "$closed" php "$probe"
+# inline: -r gives code, refused unless php:inline.
+refuse '-r is refused' php:inline "$php" -r 'echo 1;'
+grant inline
+expect '-r returns once inline is allowed' '1' "$php" -r 'echo 1;'
+revoke inline
+
+# writable-source: a script whose file is on a writable mount, refused unless allowed.
+revoke writable-source
+refuse 'a script on a writable mount is refused' php:writable-source "$php" "$work/child.php"
+grant writable-source
+expect 'the same script runs once writable-source is allowed' 'script ran' "$php" "$work/child.php"
+
+# exec, native, deserialize and phar each return with their group alone.
+for group in exec native deserialize phar; do
+	grant "$group"
+	expect "$group is taken back alone" \
+		"$(printf '%s' "$closed" | sed 's/"'"$group"'":false/"'"$group"'":true/')" report
+	revoke "$group"
+done
+
+# A link is not an allowance, even to a regular file: lock times will be links.
+: > "$work/target"
+ln -s "$work/target" "$base/exec"
+expect 'a link is not an allowance' "$closed" report
+rm -f "$base/exec"
+
+echo "probe: ok: every php protection holds, and each group takes its own back"

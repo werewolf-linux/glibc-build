@@ -154,7 +154,7 @@ class Derivation(unittest.TestCase):
         read = set()
         for patch in (ROOT / 'packages/openjdk/patches').glob('*.patch'):
             read.update(__import__('re').findall(r'WerewolfAllowance\.allowed\("([a-z-]+)"\)', patch.read_text()))
-        self.assertEqual({'deserialize', 'native-access', 'unsafe'}, read)
+        self.assertEqual({'deserialize', 'native'}, read)  # unsafe + native-access merged into native
 
 
 if __name__ == '__main__':

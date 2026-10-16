@@ -7,14 +7,18 @@ Releases follow Wolfi's within minutes, signed with Werewolf's package key.
 | Package | Follows | Repository | Policy |
 |---|---|---|---|
 | [glibc](packages/glibc) | newest `glibc-2.*` | `apk/glibc` | libc ignores its environment, no loader injection |
-| [php](packages/php) | newest `php-8.*` | `apk/php` | no exec family, `unserialize` or `dl` unless allowed |
-| [openjdk](packages/openjdk) | newest `openjdk-*` | `apk/openjdk` | no deserialization, `Unsafe` or native access unless allowed |
-| [python](packages/python) | newest `python-3.*` | `apk/python` | no environment or user site, no `ctypes` unless allowed |
+| [php](packages/php) | newest `php-8.*` | `apk/php` | no exec, native, deserialize, phar, inline or writable scripts unless allowed |
+| [openjdk](packages/openjdk) | newest `openjdk-*` | `apk/openjdk` | no deserialize or native (Unsafe, FFM, JNI) unless allowed |
+| [python](packages/python) | newest `python-3.*` | `apk/python` | no environment, user site, native, deserialize, inline or writable scripts unless allowed |
 
 Repositories are under `https://dist.werewolf-linux.org/`. Packages keep Wolfi's names;
 our version outranks the Wolfi build it rebuilds, and each provides
 `wolfi-origin:NAME:VERSION` so Werewolf's updater matches Wolfi's CVE fixes. Allowances
-are the files a Werewolf form's `allow:` writes under `/etc/werewolf/allow/`.
+are grouped by capability, pledge-style: an empty file at
+`/etc/runtime-hardening/allow/<ns>/LANG/GROUP`, or `.../all/LANG/GROUP` for every
+service, read off the read-only root, never from argv or the environment. `<ns>` is the
+service, from `/proc/self/cgroup`. Any distro shipping these packages gets the same
+default-deny and relaxes a knob by creating one file.
 
 ## How it works
 

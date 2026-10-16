@@ -69,6 +69,19 @@ class Derivation(unittest.TestCase):
             self.assertNotIn(flag, configure)
             self.assertNotIn(name, [s['name'] for s in derived['subpackages']])
 
+    def test_test_recipe_grants_every_group_in_each_test_environment(self):
+        import copy as _copy
+        derived = self.derived()[1]
+        tested = PHP.hooks.test_recipe(_copy.deepcopy(derived), 'http://127.0.0.1:0')
+        self.assertEqual('Grant every group for the suite (the probe clears them)',
+                         tested['test']['pipeline'][0]['name'])
+        self.assertIn('/etc/runtime-hardening/allow/all/php', tested['test']['pipeline'][0]['runs'])
+        for sub in tested['subpackages']:
+            test = sub.get('test')
+            if test and test.get('pipeline'):
+                self.assertEqual('Grant every group for the suite (the probe clears them)',
+                                 test['pipeline'][0]['name'])
+
     def test_the_probe_runs_in_the_package_test_with_what_it_loads(self):
         derived = self.derived()[1]
         self.assertIn('sh /tmp/probe.sh /tmp/probe.php', derived['test']['pipeline'][-1]['runs'])

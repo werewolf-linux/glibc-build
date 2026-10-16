@@ -5,3 +5,5 @@
 0005-no-url-include.patch
 0006-no-opcache-file-cache.patch
 0007-phar-wrapper-allowance.patch
+0008-inline.patch
+0009-writable-source.patch

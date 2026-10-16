@@ -76,6 +76,16 @@ class Derivation(unittest.TestCase):
         self.assertIn('sh /tmp/probe/probe.sh /tmp/probe/probe.py', derived['test']['pipeline'][-1]['runs'])
         self.assertEqual({'enabled': False}, derived['update'])
 
+    def test_test_recipe_grants_every_group_in_each_test_environment(self):
+        pkg, _, derived = self.derived()
+        tested = pkg.hooks.test_recipe(copy.deepcopy(derived), 'http://127.0.0.1:0')
+        for section in [tested] + tested['subpackages']:
+            test = section.get('test')
+            if test and test.get('pipeline'):
+                self.assertEqual('Grant every group for the suite (the probe clears them)',
+                                 test['pipeline'][0]['name'])
+        self.assertIn('/etc/runtime-hardening/allow/all/python', tested['test']['pipeline'][0]['runs'])
+
     def test_the_build_guest_grants_every_group_in_the_portable_tree(self):
         _, _, derived = self.derived()
         allow = next(s['runs'] for s in derived['pipeline']

@@ -19,6 +19,16 @@ REMOVED = {'${{package.name}}-dbg': '--enable-phpdbg=shared',  # phpdbg, an inte
 # The package test loads these, so the probe sees their functions and wrapper held.
 PROBE_PACKAGES = ['${{package.name}}-pcntl', '${{package.name}}-phar']
 PROBE_PHP, PROBE_SH = 'WEREWOLF_PROBE_PHP', 'WEREWOLF_PROBE_SH'
+# Capability groups granted in every test environment so Wolfi's own tests
+# (and the subpackages') run `php`, scripts and unserialize; the probe clears
+# them and proves deny-by-default. PHP has no `environment` group.
+GROUPS = ['exec', 'native', 'deserialize', 'phar', 'inline', 'writable-source']
+
+def grant_all():
+    return ('mkdir -p /etc/runtime-hardening/allow/all/php\n'
+            'for f in ' + ' '.join(GROUPS) + '; do\n'
+            '  : > /etc/runtime-hardening/allow/all/php/$f\n'
+            'done\n')
 
 def source_commit(config):
     source = config['pipeline'][0]
@@ -64,6 +74,9 @@ def derive(pkg, config, lock):
     if not patched or patched != list(range(1, patched[-1] + 1)):
         raise ValueError('Review changed upstream patch steps before deriving')
     pipeline.insert(patched[-1] + 1, patching.step(PATCHES))
+    # The build runs the new php on build-tree scripts (phar.phar), so the build
+    # guest grants every group; packages hold nothing under /etc/runtime-hardening.
+    pipeline.insert(patched[-1] + 2, {'name': 'Allow every group in the build guest', 'runs': grant_all()})
     configure = [step for step in pipeline if step.get('name') == 'Configure']
     if len(configure) != 1:
         raise ValueError('Review changed upstream configure step before deriving')
@@ -94,6 +107,17 @@ def derive(pkg, config, lock):
     config['update'] = {'enabled': False}
     return config
 
+def test_recipe(config, repository):
+    # Grant every group in every test environment (main and subpackages) so
+    # Wolfi's own tests run; the probe (in the main test) clears them and proves
+    # deny-by-default. Done only when tests run, not in the derived recipe.
+    grant = {'name': 'Grant every group for the suite (the probe clears them)', 'runs': grant_all()}
+    for section in [config] + config.get('subpackages', []):
+        test = section.get('test')
+        if test and test.get('pipeline'):
+            test['pipeline'].insert(0, dict(grant))
+    return config
+
 FLAG = re.compile(r'--[a-zA-Z0-9_-]+(?:=[^\s\\]+)?')
 
 def check(pkg, upstream, derived):
@@ -110,7 +134,7 @@ def check(pkg, upstream, derived):
     assert derived['pipeline'][ours - 1] == patches(upstream)[-1], "our patches must follow Wolfi's"
     # Configure loses only the removed flags, which the checks above hold.
     steps = lambda c: [x for x in c['pipeline'][1:]
-                       if x.get('name') not in ('Apply Werewolf policy patches', 'Configure')]
+                       if x.get('name') not in ('Apply Werewolf policy patches', 'Configure', 'Allow every group in the build guest')]
     assert steps(upstream) == steps(derived), 'an upstream build step changed'
     for test in upstream['test']['pipeline']:
         assert test in derived['test']['pipeline'], "Wolfi's package test removed"

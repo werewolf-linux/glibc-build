@@ -2,10 +2,10 @@
 # probe.sh WORK holds the installed JDK to the protections patches/series
 # compiles in, then takes each back with an allowance and sees it return.
 # WORK holds Probe.java. The package test runs it as root, with
-# /etc/werewolf/allow/java free to use (package.py embeds it).
+# /etc/runtime-hardening/allow free to use (package.py embeds it).
 set -eu
 work=$1
-allow=/etc/werewolf/allow/java
+allow=/etc/runtime-hardening/allow/all/java
 trap 'rm -rf "$allow"' EXIT
 cd "$work"
 # Probe uses sun.misc.Unsafe on purpose: javac warns, and that is all.
@@ -56,21 +56,20 @@ expect "a JAR manifest grants native access" "$(state none refused refused allow
 
 # Each allowance takes back what it names, and nothing else.
 mkdir -p "$allow"
-for name in deserialize unsafe native-access; do
+for name in deserialize native; do
 	rm -f "$allow"/*
 	: >"$allow/$name"
 	case $name in
 	deserialize) want=$(state none read refused refused) ;;
-	unsafe) want=$(state none refused allowed refused) ;;
-	native-access) want=$(state none refused refused allowed) ;;
+	native) want=$(state none refused allowed allowed) ;;
 	esac
-	expect "the $name allowance takes back $name alone" "$want" java Probe
+	expect "the $name group takes back its own" "$want" java Probe
 done
 
 # A link is not an allowance, even to a file: lock times will be links.
 rm -f "$allow"/*
 : >"$work/target"
-for name in deserialize unsafe native-access; do
+for name in deserialize native; do
 	ln -s "$work/target" "$allow/$name"
 done
 expect 'a link is not an allowance' "$closed" java Probe
