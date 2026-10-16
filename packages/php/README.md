@@ -20,13 +20,22 @@ FPM and extension build options and tests.
   2. Allowances: `/etc/runtime-hardening/allow/<ns>/php/GROUP` or
      `.../all/php/GROUP`, a regular file, never a link.
   3. `exec`, `system`, `passthru`, `shell_exec`, `proc_open`, `popen`, `pcntl_exec` and
-     `dl` stay disabled, whatever `php.ini` or `-d` says, unless each is allowed.
+     `dl` stay disabled, whatever `php.ini` or `-d` says, unless their capability
+     group is allowed.
   4. `unserialize` makes objects only of classes `allowed_classes` names, unless
-     `unserialize` is allowed.
+     `deserialize` is allowed.
   5. `allow_url_include` is always off.
   6. OPcache never loads compiled scripts from a file cache.
   7. A `phar://` wrapper guard remains in the source; this build disables Phar
      entirely, so an allowance cannot enable it.
+  8. `inline` gates argv, stdin, `eval` and generated stream code. Suppressing an
+     error with `@` does not permit execution. A writable-source grant alone does
+     not permit stdin, filters or user-defined stream wrappers.
+  9. Every compiled file, including includes and automatic prepends, needs a regular
+     file descriptor on a read-only mount, unless `writable-source` is allowed.
+     Failed provenance checks refuse execution. Symlinks are judged by the opened
+     target. The compiler guard installs after OPcache startup, outside cache hits;
+     the stream opener also guards preload compilation during startup.
 - **Packages**: keep CLI, FPM, their configuration, development headers and the
   extensions current Werewolf forms use. Headers support building native extensions
   such as APCu and Redis for this PHP. Omit Apache's `mod_php`, CGI, phpdbg, PEAR/PECL
@@ -45,7 +54,8 @@ FPM and extension build options and tests.
   `php.ini-production` in place and that each allowance, and only a regular file, takes
   its function back. The omitted Tidy extension's test and test dependency are
   removed. The probe verifies that Phar's extension, class and wrapper remain absent,
-  even with a Phar allowance.
+  even with a Phar allowance. Probes exercise includes, source symlinks, stream
+  wrappers, suppressed eval, stdin, and a warm OPcache after allowance revocation.
 - **Packaging**: epoch `1000 × policy.json revision + Wolfi epoch` sorts above every
   Wolfi rebuild; each package provides `wolfi-origin:php-8.5:VERSION-rEPOCH` for CVE
   matching. Derivation stops for review when the checkout, Wolfi's patches, a removed
@@ -61,6 +71,12 @@ FPM and extension build options and tests.
 - Phar is unavailable, including `phar://` and tools such as `composer.phar`.
   Our current app recipes use releases with dependencies already included.
 - `PHPRC` and `PHP_INI_SCAN_DIR` do nothing; put settings in the image's `php.ini`.
+- Generated templates and writable PHP configuration need conversion to data or
+  precompilation into the image. `php:writable-source` permits writable files;
+  `php:inline` separately permits evaluated and generated code. Neither grants the
+  other. These grants apply image-wide in current Werewolf forms.
+- Older PHP streams and runtimes bundled in OCI images do not acquire these guards
+  by adding the feed. Migrate them separately before claiming runtime protection.
 - No `phpdbg` and no `pear`/`pecl`; build extensions into the image instead.
 - No `mod_php` or `php-cgi`; serve PHP with FPM, and use CLI for background jobs.
 

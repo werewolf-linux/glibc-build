@@ -58,12 +58,14 @@ actual execution paths. Current differences remain explicit:
 | Effective-root startup refusal | yes | yes | yes | yes |
 | `native` | ctypes | `dl` | Unsafe, JNI, FFM | addons, FFI, WASI, native loaders |
 | `exec` runtime floor | leash only | yes | leash only | yes, including package scripts |
-| `inline` | argv/stdin | argv | deferred | argv/stdin, worker eval, data-URL code |
+| `inline` | argv/stdin | argv/stdin, eval, generated streams | deferred | argv/stdin, worker eval, data-URL code |
 | `writable-source` | main script | compiled files | deferred | ordinary main/dependency code, disk cache |
 | `deserialize` | pickle globals | object reconstruction | ObjectInputStream | no equivalent object-gadget API |
 
-In-process code provenance (`eval`, `vm`, generated classes and custom loaders)
-remains separate work. These defaults complement the service's kernel restrictions.
+PHP gates string compilation with `inline` and verifies every compiled file by
+its opened descriptor, including OPcache hits. In-process code provenance in the
+other runtimes (`eval`, `vm`, generated classes and custom loaders) remains separate
+work. These defaults complement the service's kernel restrictions.
 
 ## How it works
 

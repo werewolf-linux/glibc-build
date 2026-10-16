@@ -9,3 +9,5 @@
 0009-writable-source.patch
 0010-refuse-effective-root.patch
 0011-log-denials-to-stderr.patch
+0012-verify-all-compiled-files.patch
+0013-gate-evaluated-code.patch

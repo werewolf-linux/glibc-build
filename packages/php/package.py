@@ -37,7 +37,7 @@ OMITTED_EXTENSIONS = {
 APXS_STEPS = ('Copy httpd.conf before install for apxs', 'Remove httpd.conf after install for apxs')
 PRUNE = 'Remove manpages before splitting packages'
 # The probe checks pcntl's functions, and that Phar is absent even with an allowance.
-PROBE_PACKAGES = ['${{package.name}}-pcntl']
+PROBE_PACKAGES = ['${{package.name}}-pcntl', 'curl']
 PROBE_PHP, PROBE_SH = 'WEREWOLF_PROBE_PHP', 'WEREWOLF_PROBE_SH'
 # Capability groups granted in every test environment so Wolfi's own tests
 # (and the subpackages') run `php`, scripts and unserialize; the probe clears
