@@ -1,0 +1,54 @@
+SPDX-License-Identifier: GPL-2.0-only WITH Classpath-exception-2.0
+Subject: [PATCH 3/6] Read allowances from the read-only root
+Upstream-Status: Inappropriate [fixed Werewolf appliance policy]
+Reference: werewolf docs/design/hardened-interpreters.md
+Base-Commit: 815ff4dc327fe17f2433c7d115a5a503af10f3c4
+
+diff --git a/src/java.base/share/classes/jdk/internal/misc/WerewolfAllowance.java b/src/java.base/share/classes/jdk/internal/misc/WerewolfAllowance.java
+new file mode 100644
+--- /dev/null
++++ b/src/java.base/share/classes/jdk/internal/misc/WerewolfAllowance.java
+@@ -0,0 +1,43 @@
++/*
++ * SPDX-License-Identifier: GPL-2.0-only WITH Classpath-exception-2.0
++ */
++package jdk.internal.misc;
++
++import java.nio.file.Files;
++import java.nio.file.LinkOption;
++import java.nio.file.Path;
++import java.util.concurrent.ConcurrentHashMap;
++
++/**
++ * Werewolf (docs/design/hardened-interpreters.md): what the image takes back
++ * of this JDK's hardening. An allowance is an empty regular file named for it
++ * in /etc/werewolf/allow/java, on the image's read-only root. A link is not
++ * one, and argv, system properties and the environment grant nothing. The
++ * root does not change while the JDK runs, so each answer is kept.
++ */
++public final class WerewolfAllowance {
++    private static final String DIRECTORY = "/etc/werewolf/allow/java";
++    private static final ConcurrentHashMap<String, Boolean> FOUND = new ConcurrentHashMap<>();
++
++    private WerewolfAllowance() { }
++
++    /**
++     * Returns whether the image allows name: deserialize, native-access or unsafe.
++     */
++    public static boolean allowed(String name) {
++        Boolean found = FOUND.get(name);
++        if (found == null) {
++            found = check(name);
++            FOUND.putIfAbsent(name, found);
++        }
++        return found;
++    }
++
++    private static boolean check(String name) {
++        try {
++            return Files.isRegularFile(Path.of(DIRECTORY, name), LinkOption.NOFOLLOW_LINKS);
++        } catch (RuntimeException e) {
++            return false;
++        }
++    }
++}

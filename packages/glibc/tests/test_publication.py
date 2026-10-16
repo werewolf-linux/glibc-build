@@ -11,13 +11,16 @@ import unittest
 from unittest.mock import MagicMock, patch
 import yaml
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / 'scripts'))
 import inputs
-import notes
+import packages
 import publish
 import refresh
 from test_notes import facts
+
+GLIBC = packages.Package('glibc')
+notes = GLIBC.hooks.notes
 
 class LatestInputs(unittest.TestCase):
     def recipe(self, root, version, source='1'*40, primary=True):
@@ -32,7 +35,7 @@ class LatestInputs(unittest.TestCase):
             for version in ['2.9', '2.10', '2.11_rc1']:
                 self.recipe(root, version)
             self.recipe(root, '99.0', primary=False)
-            self.assertEqual('glibc-2.10.yaml', refresh.latest(root)[0].name)
+            self.assertEqual('glibc-2.10.yaml', refresh.latest(GLIBC, root)[0].name)
 
     def test_invalid_newest_source_pin_never_falls_back(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -40,19 +43,19 @@ class LatestInputs(unittest.TestCase):
             self.recipe(root, '2.9')
             self.recipe(root, '2.10', source='floating')
             with self.assertRaises(ValueError):
-                refresh.latest(root)
+                refresh.latest(GLIBC, root)
 
     def test_unrelated_commit_does_not_rebuild_but_source_and_policy_do(self):
-        lock = {'recipe': 'example.yaml', 'glibc_commit': '1'*40, 'revision': 6,
+        lock = {'recipe': 'example.yaml', 'source_commit': '1'*40, 'revision': 6,
                 'sha256': {'upstream.yaml': '2'*64}, 'mode': {'upstream.yaml': 0o644},
                 'policy_sha256': {'patch': '3'*64},
                 'wolfi_commit': '4'*40}
         first = inputs.identity(lock)
         lock['wolfi_commit'] = '5'*40
         self.assertEqual(first, inputs.identity(lock))
-        lock['glibc_commit'] = '6'*40
+        lock['source_commit'] = '6'*40
         self.assertNotEqual(first, inputs.identity(lock))
-        lock['glibc_commit'] = '1'*40
+        lock['source_commit'] = '1'*40
         lock['policy_sha256']['patch'] = '7'*64
         self.assertNotEqual(first, inputs.identity(lock))
 
@@ -127,14 +130,14 @@ class ReleaseGate(unittest.TestCase):
             with patch.dict(os.environ, environment), \
                  patch.object(publish, 'validate', return_value={'version': '2.44-r16'}), \
                  patch.object(publish, 'release', side_effect=lambda tag: current), \
-                 patch.object(publish, 'gather', gather), \
+                 patch.object(GLIBC.hooks, 'gather', gather), \
                  patch.object(publish, 'run', side_effect=run):
                 with self.assertRaisesRegex(RuntimeError, 'transient upload'):
-                    publish.stage(artifacts, assets, {'build_id': 'example'}, 'build-example')
+                    publish.stage(GLIBC, artifacts, assets, {'build_id': 'example'}, 'build-example')
                 self.assertNotIn('release.json', uploaded)
                 original = uploaded['glibc-x86_64.tar.gz']
                 os.utime(artifacts / 'glibc-x86_64' / 'example.apk', (99, 99))
-                publish.stage(artifacts, assets, {'build_id': 'example'}, 'build-example')
+                publish.stage(GLIBC, artifacts, assets, {'build_id': 'example'}, 'build-example')
                 self.assertEqual(original, uploaded['glibc-x86_64.tar.gz'])
                 self.assertEqual(1, sum(args[:3] == ('gh', 'api', '--method') for args in calls))
                 self.assertEqual('release.json', calls[-1][-1].split('/')[-1])
@@ -150,7 +153,7 @@ class ReleaseGate(unittest.TestCase):
                 self.assertEqual(['release-notes.md', 'release-notes.html', 'release-notes.json', 'release.json'], names[-4:])
                 uploaded['glibc-x86_64.tar.gz'] = b'conflicting bytes'
                 with self.assertRaisesRegex(ValueError, 'different bytes'):
-                    publish.stage(artifacts, assets, {'build_id': 'example'}, 'build-example')
+                    publish.stage(GLIBC, artifacts, assets, {'build_id': 'example'}, 'build-example')
                 # Once staged, notes are kept, never gathered again.
                 self.assertEqual(2, gather.call_count)
 
@@ -168,12 +171,12 @@ class ReleaseGate(unittest.TestCase):
                 publish.archive(packages, assets / name)
                 digests[name] = inputs.sha256(assets / name)
             manifest = {'build_id': 'example', 'source_sha': '1' * 40,
-                        'run_number': 1, 'repository': publish.PUBLIC + 'builds/example',
+                        'run_number': 1, 'repository': GLIBC.public + 'builds/example',
                         'sha256': digests}
             (assets / 'release.json').write_text(json.dumps(manifest))
             (assets / 'SHA256SUMS').write_text(''.join(
                 digest + '  ' + name + '\n' for name, digest in digests.items()))
-            def stable(packages, arch, key, work):
+            def stable(pkg, packages, arch, key, work):
                 self.assertTrue((packages / arch / 'APKINDEX.tar.gz').is_file())
                 return packages / arch / 'APKINDEX.tar.gz', []
             with patch.object(publish, 'run') as run, \
@@ -181,13 +184,13 @@ class ReleaseGate(unittest.TestCase):
                  patch.object(publish, 'stable', side_effect=stable), \
                  patch.object(publish, 'fetch', return_value=False), \
                  patch.object(publish, 'upload') as upload:
-                publish.publish(assets, {'build_id': 'example'}, 'build-example')
+                publish.publish(GLIBC, assets, {'build_id': 'example'}, 'build-example')
                 self.assertEqual(2, validate.call_count)
                 for arch in publish.ARCHES:
                     name = 'glibc-' + arch + '.tar.gz'
-                    self.assertIn(((assets / name, 'builds/example/' + name), {}),
+                    self.assertIn(((GLIBC, assets / name, 'builds/example/' + name), {}),
                                   upload.call_args_list)
-                self.assertEqual('current.json', upload.call_args.args[1])
+                self.assertEqual('current.json', upload.call_args.args[2])
                 self.assertEqual(('gh', 'release', 'edit', 'build-example',
                                   '--draft=false', '--latest=false'), run.call_args.args)
                 run.reset_mock()
@@ -195,7 +198,7 @@ class ReleaseGate(unittest.TestCase):
                 manifest['sha256'].pop('glibc-aarch64.tar.gz')
                 (assets / 'release.json').write_text(json.dumps(manifest))
                 with self.assertRaisesRegex(ValueError, 'Both native architectures'):
-                    publish.publish(assets, {'build_id': 'example'}, 'build-example')
+                    publish.publish(GLIBC, assets, {'build_id': 'example'}, 'build-example')
                 upload.assert_not_called()
                 self.assertEqual(1, run.call_count)
 
@@ -204,7 +207,7 @@ class ReleaseGate(unittest.TestCase):
         response.__enter__.return_value.read.return_value = b'body'
         with patch.object(publish.urllib.request, 'urlopen', return_value=response) as urlopen:
             self.assertEqual(b'body', publish.download('https://dist.example/current.json'))
-            self.assertIn('glibc-build-publish', urlopen.call_args.args[0].get_header('User-agent'))
+            self.assertIn('hardened-packages-publish', urlopen.call_args.args[0].get_header('User-agent'))
         missing = publish.urllib.error.HTTPError('https://dist.example/x', 404, 'Not Found', {}, None)
         with patch.object(publish.urllib.request, 'urlopen', side_effect=missing):
             self.assertIsNone(publish.download('https://dist.example/x'))
@@ -226,23 +229,23 @@ class ReleaseGate(unittest.TestCase):
                 digests['glibc-' + arch + '.tar.gz'] = inputs.sha256(assets / ('glibc-' + arch + '.tar.gz'))
             (assets / 'release.json').write_text(json.dumps({'build_id': 'example', 'source_sha': '1' * 40,
                                                              'run_number': 1, 'sha256': digests,
-                                                             'repository': publish.PUBLIC + 'builds/example'}))
+                                                             'repository': GLIBC.public + 'builds/example'}))
             (assets / 'SHA256SUMS').write_text('')
             made = notes.build(facts())
             (assets / 'release-notes.json').write_bytes(notes.encode(made))
             (assets / 'release-notes.md').write_text(notes.markdown(made))
             (assets / 'release-notes.html').write_text(notes.page(made))
             order, uploads = [], {}
-            def upload(path, key, immutable=True, content_type=None):
+            def upload(pkg, path, key, immutable=True, content_type=None):
                 order.append(key)
                 uploads[key] = (Path(path).read_bytes(), immutable, content_type)
             with patch.object(publish, 'run', side_effect=lambda *args: order.append(args[:3])), \
                  patch.object(publish, 'validate'), \
-                 patch.object(publish, 'stable', side_effect=lambda p, a, k, w: (p / a / 'APKINDEX.tar.gz', [])), \
+                 patch.object(publish, 'stable', side_effect=lambda pkg, p, a, k, w: (p / a / 'APKINDEX.tar.gz', [])), \
                  patch.object(publish, 'fetch', return_value=False), \
                  patch.object(publish, 'upload', side_effect=upload):
-                publish.publish(assets, {'build_id': 'example'}, 'build-example')
-            for name, kind in publish.NOTES.items():
+                publish.publish(GLIBC, assets, {'build_id': 'example'}, 'build-example')
+            for name, kind in publish.note_files(GLIBC).items():
                 self.assertEqual(((assets / name).read_bytes(), True, kind), uploads['builds/example/' + name])
             listing, immutable, kind = uploads['releases.json']
             self.assertEqual(([notes.entry(made)], False, 'application/json'), (json.loads(listing), immutable, kind))
@@ -307,36 +310,36 @@ class ReleaseGate(unittest.TestCase):
 
     def test_current_raw_results_pass_55_but_fail_20(self):
         files = self.results(6355, 345)
-        publish.raw_gate(files, 55)
+        GLIBC.hooks.raw_gate(files, 55)
         with self.assertRaises(ValueError):
-            publish.raw_gate(files, 20)
+            GLIBC.hooks.raw_gate(files, 20)
 
     def test_ceiling_is_exact_and_unsupported_does_not_dilute_it(self):
         files = self.results(6332, 368)
-        publish.raw_gate(files, 55)
+        GLIBC.hooks.raw_gate(files, 55)
         files['extra.test-result'] = b'FAIL: another\n'
         files.update({f'u{i}.test-result': b'UNSUPPORTED: case\n' for i in range(10000)})
         with self.assertRaises(ValueError):
-            publish.raw_gate(files, 55)
+            GLIBC.hooks.raw_gate(files, 55)
 
     def test_empty_results_and_missing_policy_evidence_fail(self):
         with self.assertRaises(ValueError):
-            publish.raw_gate(self.results(0, 0), 55)
+            GLIBC.hooks.raw_gate(self.results(0, 0), 55)
         files = self.results(100, 0)
         del files['usr/share/glibc-testresults/policy-report.json']
         with self.assertRaises(ValueError):
-            publish.raw_gate(files, 55)
+            GLIBC.hooks.raw_gate(files, 55)
 
     def test_existing_r2_object_must_have_identical_bytes(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'object'
             path.write_bytes(b'new')
-            def existing(key, destination):
+            def existing(pkg, key, destination):
                 destination.write_bytes(b'old')
                 return True
             with patch.object(publish, 'fetch', existing), patch.object(publish, 'aws') as aws:
                 with self.assertRaises(ValueError):
-                    publish.upload(path, 'builds/example/aarch64/example.apk')
+                    publish.upload(GLIBC, path, 'builds/example/aarch64/example.apk')
                 aws.assert_not_called()
 
     def test_missing_r2_object_uploads_and_matching_object_skips(self):
@@ -345,13 +348,13 @@ class ReleaseGate(unittest.TestCase):
             path.write_bytes(b'new')
             with patch.object(publish, 'fetch', return_value=False), patch.object(publish, 'aws') as aws:
                 aws.return_value.returncode = 0
-                publish.upload(path, 'builds/example/aarch64/example.apk')
+                publish.upload(GLIBC, path, 'builds/example/aarch64/example.apk')
                 aws.assert_called_once()
-            def existing(key, destination):
+            def existing(pkg, key, destination):
                 destination.write_bytes(path.read_bytes())
                 return True
             with patch.object(publish, 'fetch', existing), patch.object(publish, 'aws') as aws:
-                publish.upload(path, 'builds/example/aarch64/example.apk')
+                publish.upload(GLIBC, path, 'builds/example/aarch64/example.apk')
                 aws.assert_not_called()
 
     def test_auth_error_is_not_treated_as_absent_release(self):

@@ -27,8 +27,8 @@ class RunnerProfile(unittest.TestCase):
     def test_capability_is_scoped_to_the_private_runner_child(self):
         executable = Path('/home/runner/work/project/build/tools/bwrap')
         result = runner_setup.profile(TEMPLATE, executable)
-        self.assertIn('profile glibc_neutered_bwrap "' + str(executable.resolve()) + '"', result)
-        child = result.split('profile glibc_neutered_bwrap_child flags=', 1)[1]
+        self.assertIn('profile hardened_packages_bwrap "' + str(executable.resolve()) + '"', result)
+        child = result.split('profile hardened_packages_bwrap_child flags=', 1)[1]
         self.assertIn('allow capability sys_chroot,', child)
         self.assertNotIn('allow capability,', child)
         self.assertNotIn('unconfined', result)

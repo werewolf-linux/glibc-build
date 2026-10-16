@@ -1,37 +1,39 @@
 #!/usr/bin/env python3
-"""Record a successful native build; this runs only after all package tests."""
+"""Record a successful native build; this runs only after all package tests.
+
+usage: provenance.py PACKAGE --arch ARCH"""
 import argparse
 import json
 import os
 from pathlib import Path
 import shutil
 import subprocess
-from inputs import ROOT, INPUTS, verify, sha256
+from inputs import ROOT, verify, sha256
+import packages
 
 def main():
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument('package')
     parser.add_argument('--arch', choices=['x86_64', 'aarch64'], required=True)
     args = parser.parse_args()
-    lock = verify()
-    packages = ROOT / 'build/packages'
-    if not (packages / args.arch / 'APKINDEX.tar.gz').is_file():
+    pkg = packages.Package(args.package)
+    lock = verify(pkg)
+    out = pkg.packages
+    if not (out / args.arch / 'APKINDEX.tar.gz').is_file():
         raise ValueError('Missing signed package index')
-    for path in ['upstream.lock.json']:
-        shutil.copyfile(INPUTS / path, packages / path)
-    for path in ['tools.lock.json', 'policy.json', 'build/glibc.yaml', 'release/packages.pub']:
-        shutil.copyfile(ROOT / path, packages / Path(path).name)
-    shutil.copyfile(ROOT / 'build/keys/werewolf-packages.rsa.pub', packages / 'werewolf-packages.rsa.pub')
-    shutil.copytree(ROOT / 'patches', packages / 'patches')
-    subprocess.run(['tar', '-czf', str(packages / 'glibc-source.tar.gz'),
-                    '--exclude=.git', '-C', str(ROOT / 'build/source'), '.'], check=True)
-    subprocess.run(['tar', '-czf', str(packages / 'wolfi-inputs.tar.gz'),
-                    '-C', str(INPUTS), '.'], check=True)
-    record = {'build_id': lock['build_id'], 'arch': args.arch,
+    shutil.copyfile(pkg.inputs / 'upstream.lock.json', out / 'upstream.lock.json')
+    for path in [ROOT / 'tools.lock.json', pkg.dir / 'policy.json', pkg.recipe, ROOT / 'release/packages.pub']:
+        shutil.copyfile(path, out / path.name)
+    shutil.copyfile(ROOT / 'build/keys/werewolf-packages.rsa.pub', out / 'werewolf-packages.rsa.pub')
+    shutil.copytree(pkg.dir / 'patches', out / 'patches')
+    subprocess.run(['tar', '-czf', str(out / (pkg.name + '-source.tar.gz')),
+                    '--exclude=.git', '-C', str(pkg.source), '.'], check=True)
+    subprocess.run(['tar', '-czf', str(out / 'wolfi-inputs.tar.gz'), '-C', str(pkg.inputs), '.'], check=True)
+    record = {'package': pkg.name, 'build_id': lock['build_id'], 'arch': args.arch,
               'source_sha': os.environ['GITHUB_SHA'], 'run_id': os.environ['GITHUB_RUN_ID'],
-              'version': lock['version'] + '-r' + str(lock['epoch'] + lock['revision']),
-              'sha256': {str(p.relative_to(packages)): sha256(p)
-                         for p in sorted(packages.rglob('*')) if p.is_file()}}
-    (packages / 'build.json').write_text(json.dumps(record, indent=2) + '\n')
+              'version': pkg.hooks.full_version(lock),
+              'sha256': {str(p.relative_to(out)): sha256(p) for p in sorted(out.rglob('*')) if p.is_file()}}
+    (out / 'build.json').write_text(json.dumps(record, indent=2) + '\n')
 
 if __name__ == '__main__':
     main()

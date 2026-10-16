@@ -1,64 +1,49 @@
 #!/usr/bin/env python3
-"""Verify provenance and that our derivation does not relax Wolfi hardening."""
-import hashlib
-import json
-from pathlib import Path
+"""Verify a package's provenance, and that its derivation relaxes nothing.
+
+usage: verify.py PACKAGE"""
+import argparse
 import re
 import sys
 import yaml
+from derive import derive
+from inputs import verify
+import packages
+import patching
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / 'scripts'))
-from derive import derive, version
-from inputs import verify, INPUTS
+HEADERS = ('Subject:', 'Upstream-Status:', 'Reference:')
+
+def series(pkg):
+    """Assert patches/series lists every patch once, numbered in order, each with its header."""
+    names = (pkg.dir / 'patches/series').read_text().split()
+    assert names and len(names) == len(set(names)), 'patches/series lists each patch once'
+    assert set(names) == {p.name for p in (pkg.dir / 'patches').glob('*.patch')}, 'patches/series and patches/ differ'
+    for number, name in enumerate(names, 1):
+        assert re.fullmatch(r'%04d-[a-z0-9-]+\.patch' % number, name), name
+        header = (pkg.dir / 'patches' / name).read_text().split('\ndiff --git', 1)[0]
+        for field in HEADERS:
+            assert field in header, name + ' has no ' + field
+
+def check(pkg, upstream, derived):
+    """Raise AssertionError unless derived keeps what every build needs."""
+    fetches = [x for x in derived['pipeline'] if x.get('name') == 'Fetch the locked source commit']
+    assert len(fetches) == 1 and 'git' in fetches[0]['needs']['packages'], 'one source fetch, with Git'
+    assert not [x for x in derived['pipeline'] if x.get('uses') == 'git-checkout'], "Wolfi's checkout replaced"
+    assert derived['update'] == {'enabled': False}, "Wolfi's update automation stays off"
+    ours = [x for x in derived['pipeline'] if x.get('name') == 'Apply Werewolf policy patches']
+    assert ours == [patching.step(pkg.hooks.PATCHES)], 'patches apply by the shared step, once'
+    series(pkg)
+    pkg.hooks.check(pkg, upstream, derived)
 
 def main():
-    lock = verify()
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument('package')
+    pkg = packages.Package(parser.parse_args().package)
+    lock = verify(pkg)
     assert re.fullmatch('[0-9a-f]{40}', lock['wolfi_commit'])
-    assert re.fullmatch('[0-9a-f]{40}', lock['glibc_commit'])
-    for name, digest in lock['sha256'].items():
-        assert hashlib.sha256((INPUTS/name).read_bytes()).hexdigest() == digest, name
-    upstream = yaml.safe_load((INPUTS/'upstream.yaml').read_text())
-    derived = derive()
-    assert 'git' in derived['pipeline'][0]['needs']['packages'], 'source fetch requires Git in the guest'
-    configure = lambda c: next(x['runs'] for x in c['pipeline'] if x.get('name') == 'Configure glibc')
-    flags = lambda s: set(re.findall(r'--[a-zA-Z0-9_-]+(?:=[^\s\\]+)?', s))
-    kept = {f for f in flags(configure(upstream)) if not f.startswith('--enable-kernel=')}
-    assert kept <= flags(configure(derived)), 'upstream configure flags removed'
-    # The minimum kernel may only rise: it removes fallbacks, never protections.
-    kernels = lambda s: [version(v) for v in re.findall(r'--enable-kernel=([0-9.]+)', s)]
-    assert len(kernels(configure(derived))) == 1, 'one minimum kernel'
-    assert kernels(configure(derived)) >= kernels(configure(upstream)), 'minimum kernel lowered'
-    assert derived['environment'] == upstream['environment'], 'upstream compiler environment changed'
-    packages = derived['environment']['contents']['packages']
-    assert 'openssf-compiler-options' in packages and 'build-base' in packages
-    for flag in ['--enable-bind-now', '--enable-fortify-source', '--enable-stackguard-randomization',
-                 '--enable-stack-protector=strong', '--enable-cet']:
-        assert flag in flags(configure(derived)), flag
-    assert derived['environment']['environment']['CPPFLAGS'] == ''
-    assert 'CFLAGS' not in derived['environment'].get('environment', {})
-    assert 'LDFLAGS' not in derived['environment'].get('environment', {})
-    original_patch = next(x for x in upstream['pipeline'] if x.get('uses') == 'patch')
-    assert original_patch == next(x for x in derived['pipeline'] if x.get('uses') == 'patch')
-    for name in ['Run the glibc testsuite', 'Generate public ABI report', 'Check libc public ABI against the previous report']:
-        assert next(x for x in upstream['pipeline'] if x.get('name') == name) == next(x for x in derived['pipeline'] if x.get('name') == name), name
-    policy = json.loads((ROOT/'policy.json').read_text())
-    assert 0 <= policy['max_fail_per_mille'] <= 55
-    gate_name = 'Verify PASS/FAIL ratio in test result files is within acceptable threshold'
-    def gate(config):
-        sub = next(x for x in config['subpackages'] if x['name'] == '${{package.name}}-testresults')
-        return next(x['runs'] for x in sub['test']['pipeline'] if x.get('name') == gate_name)
-    ceiling = format(policy['max_fail_per_mille'] / 1000, '.3f')
-    assert gate(derived).replace('MAX_FAIL_RATIO='+ceiling, 'MAX_FAIL_RATIO=0.02').replace(
-        '-exec /usr/bin/grep ', '-exec grep ') == gate(upstream), 'raw test counting/gate changed'
-    series = (ROOT/'patches/series').read_text().splitlines()
-    assert len(series) == len(set(series)) == 4
-    assert set(series) == {p.name for p in (ROOT/'patches').glob('*.patch')}
-    for name in series:
-        assert re.fullmatch(r'[0-9]{4}-[a-z-]+\.patch', name), name
-        text = (ROOT/'patches'/name).read_text()
-        assert 'Subject:' in text and 'Upstream-Status:' in text and 'Reference:' in text
-    print('PASS: input hashes, upstream hardening/environment/patches/ABI gates, patch series')
+    assert re.fullmatch('[0-9a-f]{40}', lock['source_commit'])
+    check(pkg, yaml.safe_load((pkg.inputs / 'upstream.yaml').read_text()), derive(pkg))
+    print('PASS: ' + pkg.name + ': input hashes, upstream hardening and steps, patch series')
 
 if __name__ == '__main__':
-    main()
+    sys.exit(main())

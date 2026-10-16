@@ -10,6 +10,8 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 import source
 
+MIRRORS = ('https://example.invalid/one.git', 'https://example.invalid/two.git')
+
 
 class SourceFetch(unittest.TestCase):
     def repository(self, root):
@@ -48,13 +50,13 @@ class SourceFetch(unittest.TestCase):
             destination = root / 'checkout'
             for commit in ('master', '--upload-pack=attacker', '0' * 39):
                 with self.assertRaises(ValueError):
-                    source.checkout(destination, commit)
+                    source.checkout(destination, commit, MIRRORS)
                 self.assertFalse(destination.exists())
             destination.mkdir()
             (destination / '.git').mkdir()
             (destination / 'file').write_text('keep\n')
             with self.assertRaises(ValueError):
-                source.checkout(destination, '0' * 40)
+                source.checkout(destination, '0' * 40, MIRRORS)
             self.assertEqual('keep\n', (destination / 'file').read_text())
 
     def test_wrong_commit_fails_without_checkout_or_retry(self):
@@ -66,7 +68,7 @@ class SourceFetch(unittest.TestCase):
                  patch.object(source.time, 'sleep') as sleep, \
                  contextlib.redirect_stdout(io.StringIO()):
                 with self.assertRaisesRegex(ValueError, 'differs'):
-                    source.checkout(Path(directory), '0' * 40)
+                    source.checkout(Path(directory), '0' * 40, MIRRORS)
             self.assertFalse(any('checkout' in call.args[0] for call in commands.call_args_list))
             sleep.assert_not_called()
 
@@ -83,9 +85,9 @@ class SourceFetch(unittest.TestCase):
                  patch.object(source.time, 'sleep') as sleep, \
                  contextlib.redirect_stdout(io.StringIO()):
                 with self.assertRaisesRegex(RuntimeError, 'bounded retries'):
-                    source.checkout(Path(directory), '0' * 40)
+                    source.checkout(Path(directory), '0' * 40, MIRRORS)
             fetches = [call for call in commands.call_args_list if 'fetch' in call.args[0]]
-            self.assertEqual(len(source.SOURCES) * len(source.BACKOFF), len(fetches))
+            self.assertEqual(len(MIRRORS) * len(source.BACKOFF), len(fetches))
             self.assertEqual([15, 45], [call.args[0] for call in sleep.call_args_list])
             self.assertFalse(any('checkout' in call.args[0] for call in commands.call_args_list))
 

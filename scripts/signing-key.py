@@ -6,7 +6,7 @@ import subprocess
 
 target = Path('build/keys/werewolf-packages.rsa')
 target.parent.mkdir(parents=True, exist_ok=True)
-value = os.environ.pop('GLIBC_APK_SIGNING_KEY', '')
+value = os.environ.pop('PACKAGES_APK_SIGNING_KEY', '')
 if value:
     fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(fd, 'w') as output:

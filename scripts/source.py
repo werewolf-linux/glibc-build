@@ -1,16 +1,18 @@
 #!/usr/bin/env python3
-"""Fetch only the locked glibc commit, with bounded mirror retries."""
+"""Fetch only a package's locked source commit, with bounded mirror retries.
+
+The build itself fetches the same way (derive.fetch); this is the host's copy,
+for prepare.py."""
 import argparse
 from pathlib import Path
 import re
 import subprocess
 import time
 
-SOURCES = ('https://github.com/kraj/glibc.git', 'https://sourceware.org/git/glibc.git')
 BACKOFF = (0, 15, 45)
 
 
-def checkout(destination, commit, sources=SOURCES):
+def checkout(destination, commit, sources):
     if not re.fullmatch('[0-9a-f]{40}', commit):
         raise ValueError('Source commit must be an exact SHA-1')
     if (destination / '.git').exists() or (destination / '.git').is_symlink():
@@ -48,8 +50,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('destination', type=Path)
     parser.add_argument('commit')
+    parser.add_argument('source', nargs='+')
     args = parser.parse_args()
-    checkout(args.destination, args.commit)
+    checkout(args.destination, args.commit, args.source)
 
 
 if __name__ == '__main__':

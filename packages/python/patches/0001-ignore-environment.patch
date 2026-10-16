@@ -1,0 +1,77 @@
+SPDX-License-Identifier: PSF-2.0
+Subject: [PATCH 1/3] Ignore PYTHON* variables unless allowed, and the user site
+Upstream-Status: Inappropriate [fixed Werewolf appliance policy]
+Reference: werewolf docs/design/hardened-interpreters.md
+Base-Commit: 626fb7612218cf10fbcf0525fce6b37c8a60d4be
+
+diff --git a/Python/preconfig.c b/Python/preconfig.c
+--- a/Python/preconfig.c
++++ b/Python/preconfig.c
+@@ -280,6 +280,25 @@
+ /* --- PyPreConfig ----------------------------------------------- */
+ 
+ 
++#ifndef PY_WEREWOLF_ALLOW_DIR
++#  define PY_WEREWOLF_ALLOW_DIR "/etc/werewolf/allow/python"
++#endif
++
++/* Werewolf (docs/design/hardened-interpreters.md): PYTHON* variables are
++   ignored, as with -E, unless the image allows them: an empty regular file,
++   never a link, on its root. No option or variable lowers this. */
++int
++_Py_WerewolfEnvironmentAllowed(void)
++{
++#ifdef MS_WINDOWS
++    return 0;
++#else
++    struct stat st;
++    return lstat(PY_WEREWOLF_ALLOW_DIR "/environment", &st) == 0 && S_ISREG(st.st_mode);
++#endif
++}
++
++
+ void
+ _PyPreConfig_InitCompatConfig(PyPreConfig *config)
+ {
+@@ -316,7 +335,7 @@
+     config->_config_init = (int)_PyConfig_INIT_PYTHON;
+     config->isolated = 0;
+     config->parse_argv = 1;
+-    config->use_environment = 1;
++    config->use_environment = _Py_WerewolfEnvironmentAllowed();
+     /* Set to -1 to enable C locale coercion (PEP 538) depending on
+        the LC_CTYPE locale, PYTHONUTF8 and PYTHONCOERCECLOCALE
+        environment variables. */
+diff --git a/Python/initconfig.c b/Python/initconfig.c
+--- a/Python/initconfig.c
++++ b/Python/initconfig.c
+@@ -1219,7 +1219,9 @@
+     config->tlbc_enabled = 1;
+ #endif
+ }
++
+ 
++extern int _Py_WerewolfEnvironmentAllowed(void);  /* preconfig.c */
+ 
+ static void
+ config_init_defaults(PyConfig *config)
+@@ -1227,7 +1229,9 @@
+     _PyConfig_InitCompatConfig(config);
+ 
+     config->isolated = 0;
+-    config->use_environment = 1;
++    /* Werewolf: as -E and -s, unless the image allows the environment; the
++       user site never: a process that runs Python again chooses its home. */
++    config->use_environment = _Py_WerewolfEnvironmentAllowed();
+     config->site_import = 1;
+     config->bytes_warning = 0;
+     config->inspect = 0;
+@@ -1237,7 +1241,7 @@
+     config->write_bytecode = 1;
+     config->verbose = 0;
+     config->quiet = 0;
+-    config->user_site_directory = 1;
++    config->user_site_directory = 0;
+     config->buffered_stdio = 1;
+     config->pathconfig_warnings = 1;
+ #ifdef MS_WINDOWS

@@ -22,10 +22,10 @@ def profile(template, executable):
     if re.search(r'\bcapability\b', rules.replace('audit deny capability,', '')):
         raise ValueError('Review unexpected child capability rules')
     replacements = [
-        ('profile bwrap /usr/bin/bwrap', 'profile glibc_neutered_bwrap "' + path + '"'),
-        ('&bwrap//&unpriv_bwrap', '&glibc_neutered_bwrap//&glibc_neutered_bwrap_child'),
-        (marker, 'profile glibc_neutered_bwrap_child flags='),
-        ('&unpriv_bwrap', '&glibc_neutered_bwrap_child'),
+        ('profile bwrap /usr/bin/bwrap', 'profile hardened_packages_bwrap "' + path + '"'),
+        ('&bwrap//&unpriv_bwrap', '&hardened_packages_bwrap//&hardened_packages_bwrap_child'),
+        (marker, 'profile hardened_packages_bwrap_child flags='),
+        ('&unpriv_bwrap', '&hardened_packages_bwrap_child'),
         ('audit deny capability,', 'allow capability sys_chroot,'),
         ('include if exists <local/bwrap-userns-restrict>', ''),
         ('include if exists <local/unpriv_bwrap>', ''),

@@ -1,27 +1,42 @@
 PYTHON ?= python3
-ARCH ?= $(shell uname -m)
+ARCH ?= $(subst arm64,aarch64,$(shell uname -m))
 MELANGE ?= $(if $(wildcard build/tools/melange),$(abspath build/tools/melange),melange)
 export MELANGE
+# One package: make PACKAGE=php build. refresh and discover take all without it.
+PACKAGE ?=
+need-package = $(if $(PACKAGE),,$(error name one: make PACKAGE=$(subst $(eval) ,|,$(notdir $(patsubst %/package.py,%,$(wildcard packages/*/package.py)))) $@))
 
-.PHONY: refresh verify derive prepare build check
+.PHONY: test refresh discover verify derive prepare build check
+# Every unit test, shared and each package's; no network, no captured inputs.
+test:
+	$(PYTHON) -m unittest discover -s tests -p 'test_*.py'
+	for package in packages/*/; do $(PYTHON) -m unittest discover -s "$${package}tests" -p 'test_*.py' || exit 1; done
+
 refresh:
-	$(PYTHON) scripts/refresh.py $(if $(WOLFI),--wolfi $(WOLFI))
+	$(PYTHON) scripts/refresh.py $(if $(WOLFI),--wolfi $(WOLFI)) $(PACKAGE)
 
-build/inputs/upstream.lock.json:
-	$(PYTHON) scripts/refresh.py $(if $(WOLFI),--wolfi $(WOLFI))
+# The scheduled check, without reporting to GitHub.
+discover:
+	$(PYTHON) scripts/discover.py --local $(if $(WOLFI),--wolfi $(WOLFI)) $(PACKAGE)
 
-verify: build/inputs/upstream.lock.json
-	$(PYTHON) scripts/verify.py
+build/$(PACKAGE)/inputs/upstream.lock.json:
+	$(call need-package)
+	$(PYTHON) scripts/refresh.py $(if $(WOLFI),--wolfi $(WOLFI)) $(PACKAGE)
+
+verify: build/$(PACKAGE)/inputs/upstream.lock.json
+	$(call need-package)
+	$(PYTHON) scripts/verify.py $(PACKAGE)
 
 derive: verify
-	$(PYTHON) scripts/derive.py
+	$(PYTHON) scripts/derive.py $(PACKAGE)
 
+# A fresh checkout each time: prepare never resets an existing one.
 prepare: verify
-	$(PYTHON) scripts/prepare.py build/source
+	rm -rf build/$(PACKAGE)/source
+	$(PYTHON) scripts/prepare.py $(PACKAGE)
 
 build: derive
 	$(PYTHON) scripts/signing-key.py
-	$(PYTHON) scripts/build.py --arch $(ARCH)
+	$(PYTHON) scripts/build.py $(PACKAGE) --arch $(ARCH)
 
-check: verify
-	$(PYTHON) -m unittest discover -s tests -p 'test_*.py'
+check: test verify

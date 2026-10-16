@@ -1,5 +1,6 @@
 import json
 import os
+from types import SimpleNamespace
 from pathlib import Path
 import subprocess
 import sys
@@ -22,7 +23,7 @@ class InputTransport(unittest.TestCase):
             helper = source/'compatibility-gate'
             helper.write_text('#!/bin/sh\nexit 0\n')
             helper.chmod(0o755)
-            lock = {'recipe': 'fixture.yaml', 'glibc_commit': '1'*40, 'revision': 6,
+            lock = {'recipe': 'fixture.yaml', 'source_commit': '1'*40, 'revision': 6,
                     'sha256': {helper.name: inputs.sha256(helper)},
                     'mode': inputs.file_modes(source), 'policy_sha256': {}}
             lock['build_id'] = inputs.identity(lock)
@@ -36,10 +37,11 @@ class InputTransport(unittest.TestCase):
                 archive.extractall(restored, filter='data')
             subprocess.run([str(restored/helper.name)], check=True)
             with patch.object(inputs, 'policy_hashes', return_value={}):
-                inputs.verify(restored)
+                pkg = SimpleNamespace(inputs=restored, root=root)
+                inputs.verify(pkg)
                 (restored/helper.name).chmod(0o644)
                 with self.assertRaisesRegex(ValueError, 'file modes'):
-                    inputs.verify(restored)
+                    inputs.verify(pkg)
             different = dict(lock, mode={helper.name: 0o644})
             self.assertNotEqual(lock['build_id'], inputs.identity(different))
 

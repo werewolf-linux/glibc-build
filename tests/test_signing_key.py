@@ -24,7 +24,7 @@ class SigningKey(unittest.TestCase):
         (root / 'release').mkdir()
         (root / 'release/packages.pub').write_bytes(self.public if public is None else public)
         env = os.environ.copy()
-        env['GLIBC_APK_SIGNING_KEY'] = key.decode()
+        env['PACKAGES_APK_SIGNING_KEY'] = key.decode()
         return subprocess.run([sys.executable, str(SCRIPT)], cwd=root, env=env,
                               capture_output=True)
 
