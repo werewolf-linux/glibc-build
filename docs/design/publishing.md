@@ -4,7 +4,8 @@
 
 Every ten minutes, rebuild the newest stable Wolfi recipe of each package under
 `packages/` with our policy patches, and publish signed APK repositories for both native
-architectures to R2 and GitHub. One package never holds back another.
+architectures to R2 and GitHub. Consumers use one combined feed at `apk/hardened`.
+One package never holds back another.
 
 ## Background
 
@@ -26,8 +27,10 @@ person told when a Wolfi change stops a package.
 
 ## Detailed design
 
-`refresh.yml` runs at minutes 7-57/10, on main pushes and by hand, in one concurrency
-group. `check.yml` runs discovery on pull requests without building or filing issues.
+`refresh.yml` runs at minutes 7-57/10, on main pushes and by hand. Builds and
+publication remain independent per package; only index commits serialize through
+R2 conditional writes. `check.yml` runs discovery on pull requests without building
+or filing issues.
 
 **Discovery** (`discover.py`) clones Wolfi once, then runs refresh, verify, derive and
 prepare for each package as separate commands. The first to fail stops that package: its
@@ -68,11 +71,23 @@ resumes with the original bytes. Archives are normalized and assets never overwr
 
 R2 holds each snapshot under `apk/NAME/builds/<input hash>/<arch>/`, APKs before the
 signed index, both architectures before the completion manifest. Machines follow
-`https://dist.werewolf-linux.org/apk/NAME`, whose `<arch>/` keeps every published APK
-and one index naming them all. The publisher verifies that index against the committed
-trust root, adds the snapshot, signs and checks it before any upload. A version keeps
-its first build; the index is the only object ever replaced. `current.json` moves after
-both repositories exist, never backwards, and the GitHub release becomes public last.
+`https://dist.werewolf-linux.org/apk/hardened`, whose `<arch>/` keeps every published
+APK and one index naming all package families and retained versions. Per-package
+stable indexes remain available for compatibility and as authenticated backfill inputs.
+
+`feed.py` authenticates each source index and each added APK, including its payload,
+control checksum, architecture, identity and size. Immutable APKs arrive before the
+combined index. Index reads use the R2 API rather than a CDN. A signed union replaces
+the index with `If-Match` on the ETag read, or `If-None-Match: *` for initial creation.
+A racing publisher re-reads, merges and retries; other errors stop publication. APK
+creation is conditional too and never overwrites a version's first bytes.
+
+Normal publication includes its package in the combined feed before completing the
+GitHub release. A separate feed job backfills already published releases even when
+discovery requires no new build, and repairs partial publication. A missing or failed
+family never removes its last good versions or prevents other families from merging.
+`current.json` advances conditionally after both architectures are included, never
+backwards, and the GitHub release becomes public last.
 
 Release notes are made once, at staging: Wolfi's and upstream's changes, ours,
 advisories fixed, test counts, probe results and provenance. Every package provides
@@ -100,7 +115,8 @@ Wolfi build outranks ours until we publish; Werewolf must take them only from he
 
 Publication reads artifacts from its own run, never a pull request's, which use
 throwaway keys. Bucket reads are authenticated; an authentication error never means
-absent. CI is the single writer to each prefix. Mirrors give availability, not trust:
+absent. Concurrent CI writers commit indexes conditionally; signature failures never
+reset an index. Mirrors give availability, not trust:
 Wolfi's recipe pins the commit, checked before Git runs, with hooks disabled.
 
 Fuzz can misplace a hunk. Each package's probes test every protection on the installed

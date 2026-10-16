@@ -3,9 +3,9 @@
 
 status says whether this build's release is missing, staged or complete;
 stage validates both architectures and stages a draft release with its
-notes; publish signs the package's stable index, uploads everything, and
-makes the release public last. Each package has its own repository,
-apk/NAME/, and its releases are tagged NAME/build-ID.
+notes; publish uploads immutable packages and snapshots, merges the signed
+package and combined hardened indexes, and makes the release public last.
+Package snapshots remain under apk/NAME/; consumers use apk/hardened/.
 
 usage: publish.py status|stage|publish PACKAGE"""
 import argparse
@@ -34,6 +34,7 @@ ARCHES = ('x86_64', 'aarch64')
 ENDPOINT = 'https://c860af766754fb92eec27bc723e6db5d.r2.cloudflarestorage.com'
 BUCKET = 'werewolf'
 AGENT = 'hardened-packages-publish (+https://github.com/werewolf-linux/hardened-packages)'
+HARDENED = packages.PUBLIC + 'apk/hardened/'
 
 def run(*args):
     return subprocess.run(args, check=True, stdout=subprocess.PIPE, text=True).stdout
@@ -272,7 +273,7 @@ def gather(pkg, artifacts, lock, records):
             'source': {'source_commit': lock['source_commit'], 'wolfi_commit': lock['wolfi_commit'],
                        'wolfi_version': wolfi, 'recipe': lock['recipe'], 'policy_revision': lock['revision'],
                        'upstream': pkg.hook('UPSTREAM')},
-            'repository': {'stable': pkg.public, 'snapshot': pkg.public + 'builds/' + lock['build_id'],
+            'repository': {'stable': HARDENED, 'snapshot': pkg.public + 'builds/' + lock['build_id'],
                            'key_sha256': sha256(ROOT / 'release/packages.pub')},
             'patches': (pkg.dir / 'patches/series').read_text().split(), 'wolfi_inputs': lock['sha256'],
             'previous': previous, 'commits': commits,
@@ -346,6 +347,21 @@ def fetch(pkg, key, destination):
         return False
     raise RuntimeError(result.stderr)
 
+def fetch_etag(pkg, key, destination):
+    """Read one committed object and its ETag together, without CDN caching."""
+    result = aws('get-object', '--bucket', BUCKET, '--key', pkg.prefix + key, str(destination))
+    if result.returncode == 0:
+        etag = json.loads(result.stdout)['ETag']
+        if not isinstance(etag, str) or not etag:
+            raise ValueError('R2 returned no object ETag')
+        return etag
+    if '(NoSuchKey)' in result.stderr or '(404)' in result.stderr:
+        return None
+    raise RuntimeError(result.stderr)
+
+def raced(result):
+    return any(code in result.stderr for code in ('(PreconditionFailed)', '(ConditionalRequestConflict)'))
+
 def upload(pkg, path, key, immutable=True, content_type=None):
     if immutable:
         with tempfile.TemporaryDirectory() as directory:
@@ -356,8 +372,16 @@ def upload(pkg, path, key, immutable=True, content_type=None):
                 return
     result = aws('put-object', '--bucket', BUCKET, '--key', pkg.prefix + key, '--body', str(path),
                  '--cache-control', 'public, max-age=31536000, immutable' if immutable else 'no-cache',
+                 *(['--if-none-match', '*'] if immutable else []),
                  *(['--content-type', content_type] if content_type else []))
     if result.returncode:
+        if immutable and raced(result):
+            # Another publisher may have created this immutable object after
+            # our read. Verify its bytes rather than replacing them.
+            with tempfile.TemporaryDirectory() as directory:
+                previous = Path(directory) / 'object'
+                if fetch(pkg, key, previous) and sha256(previous) == sha256(path):
+                    return
         raise RuntimeError(result.stderr)
 
 def entries(parts):
@@ -397,6 +421,35 @@ def signed_index(found, key):
     header = item.tobuf(tarfile.USTAR_FORMAT, tarfile.ENCODING, 'surrogateescape')
     return gzip.compress(header + signature + b'\0' * (-len(signature) % 512), mtime=0) + control
 
+def merge_index(repo, current, arch, key, directory, trust=ROOT / 'release/packages.pub'):
+    """Commit a union against the exact index read; only the index write serializes.
+
+    All APKs current lists must already exist. A lost race re-reads and merges
+    the winner, preserving its additions and every previously published version.
+    """
+    if isinstance(current, Path):
+        current = entries(authenticated(current, trust))
+    remote = arch + '/APKINDEX.tar.gz'
+    previous_path = directory / (arch + '-cas-previous.tar.gz')
+    next_path = directory / (arch + '-cas-next.tar.gz')
+    for attempt in range(12):
+        etag = fetch_etag(repo, remote, previous_path)
+        previous = entries(authenticated(previous_path, trust)) if etag is not None else {}
+        merged, added = merge(previous, current)
+        if not added and etag is not None:
+            return
+        next_path.write_bytes(signed_index(merged, key))
+        authenticated(next_path, trust)
+        condition = ['--if-match', etag] if etag is not None else ['--if-none-match', '*']
+        result = aws('put-object', '--bucket', BUCKET, '--key', repo.prefix + remote,
+                     '--body', str(next_path), '--cache-control', 'no-cache', *condition)
+        if result.returncode == 0:
+            return
+        if not raced(result):
+            raise RuntimeError(result.stderr)
+        time.sleep(min(attempt + 1, 5))
+    raise RuntimeError('Index kept changing during publication: ' + repo.prefix + remote)
+
 def stable(pkg, root, arch, key, directory):
     # The stable repository's next index, verified, and the APKs it adds.
     trust = ROOT / 'release/packages.pub'
@@ -409,6 +462,25 @@ def stable(pkg, root, arch, key, directory):
     index.write_bytes(signed_index(merged, key))
     authenticated(index, trust)
     return index, added
+
+def advance_current(pkg, manifest, path):
+    """Never let an older concurrent publication move the release pointer back."""
+    with tempfile.TemporaryDirectory() as directory:
+        previous = Path(directory) / 'current.json'
+        for attempt in range(12):
+            etag = fetch_etag(pkg, 'current.json', previous)
+            if etag is not None and json.loads(previous.read_text())['run_number'] >= manifest['run_number']:
+                return
+            condition = ['--if-match', etag] if etag is not None else ['--if-none-match', '*']
+            result = aws('put-object', '--bucket', BUCKET, '--key', pkg.prefix + 'current.json',
+                         '--body', str(path), '--cache-control', 'no-cache',
+                         '--content-type', 'application/json', *condition)
+            if result.returncode == 0:
+                return
+            if not raced(result):
+                raise RuntimeError(result.stderr)
+            time.sleep(min(attempt + 1, 5))
+    raise RuntimeError('Current release kept changing: ' + pkg.name)
 
 def publish(pkg, assets, lock, tag, key=ROOT / 'build/keys/werewolf-packages.rsa'):
     assets.mkdir(parents=True, exist_ok=True)
@@ -448,11 +520,12 @@ def publish(pkg, assets, lock, tag, key=ROOT / 'build/keys/werewolf-packages.rsa
         for arch, (index, added) in indexes.items():
             for name in added:
                 upload(pkg, roots[arch] / arch / name, arch + '/' + name)
-            upload(pkg, index, arch + '/APKINDEX.tar.gz', immutable=False)
-    with tempfile.TemporaryDirectory() as directory:
-        current = Path(directory) / 'current'
-        if not fetch(pkg, 'current.json', current) or json.loads(current.read_text())['run_number'] <= manifest['run_number']:
-            upload(pkg, assets / 'release.json', 'current.json', immutable=False)
+            merge_index(pkg, index, arch, key, work)
+        # Include both validated architectures in the consumer feed before
+        # completing this package's release. Retries also repair partial uploads.
+        import feed
+        feed.include(pkg, key)
+    advance_current(pkg, manifest, assets / 'release.json')
     if noted and hasattr(notes_of(pkg), 'releases'):
         update_index(pkg, json.loads((assets / 'release-notes.json').read_text()))
     # The public release is the completion marker, after both R2 repositories exist.

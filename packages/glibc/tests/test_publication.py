@@ -182,6 +182,8 @@ class ReleaseGate(unittest.TestCase):
             with patch.object(publish, 'run') as run, \
                  patch.object(publish, 'validate') as validate, \
                  patch.object(publish, 'stable', side_effect=stable), \
+                 patch.object(publish, 'merge_index'), \
+                 patch.object(publish, 'advance_current') as advance, \
                  patch.object(publish, 'fetch', return_value=False), \
                  patch.object(publish, 'upload') as upload:
                 publish.publish(GLIBC, assets, {'build_id': 'example'}, 'build-example')
@@ -190,7 +192,7 @@ class ReleaseGate(unittest.TestCase):
                     name = 'glibc-' + arch + '.tar.gz'
                     self.assertIn(((GLIBC, assets / name, 'builds/example/' + name), {}),
                                   upload.call_args_list)
-                self.assertEqual('current.json', upload.call_args.args[2])
+                self.assertEqual((GLIBC, manifest, assets / 'release.json'), advance.call_args.args)
                 self.assertEqual(('gh', 'release', 'edit', 'build-example',
                                   '--draft=false', '--latest=false'), run.call_args.args)
                 run.reset_mock()
@@ -242,6 +244,8 @@ class ReleaseGate(unittest.TestCase):
             with patch.object(publish, 'run', side_effect=lambda *args: order.append(args[:3])), \
                  patch.object(publish, 'validate'), \
                  patch.object(publish, 'stable', side_effect=lambda pkg, p, a, k, w: (p / a / 'APKINDEX.tar.gz', [])), \
+                 patch.object(publish, 'merge_index'), \
+                 patch.object(publish, 'advance_current'), \
                  patch.object(publish, 'fetch', return_value=False), \
                  patch.object(publish, 'upload', side_effect=upload):
                 publish.publish(GLIBC, assets, {'build_id': 'example'}, 'build-example')

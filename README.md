@@ -4,14 +4,19 @@ Werewolf's rebuilds of Wolfi packages. Each one is Wolfi's newest stable recipe,
 captured unchanged, plus a few policy patches that remove or deny what attacks need.
 Releases follow Wolfi's within minutes, signed with Werewolf's package key.
 
-| Package | Follows | Repository | Policy |
-|---|---|---|---|
-| [glibc](packages/glibc) | newest `glibc-2.*` | `apk/glibc` | libc ignores its environment, no loader injection |
-| [php](packages/php) | newest `php-8.*` | `apk/php` | no exec, native, deserialize, phar, inline or writable scripts unless allowed |
-| [openjdk](packages/openjdk) | newest `openjdk-*` | `apk/openjdk` | no deserialize or native (Unsafe, FFM, JNI) unless allowed |
-| [python](packages/python) | newest `python-3.*` | `apk/python` | no environment, user site, native, deserialize, inline or writable scripts unless allowed |
+Consumers use one feed: **https://dist.werewolf-linux.org/apk/hardened**, with
+`x86_64/APKINDEX.tar.gz` and `aarch64/APKINDEX.tar.gz` signed by
+[release/packages.pub](release/packages.pub).
 
-Repositories are under `https://dist.werewolf-linux.org/`. Packages keep Wolfi's names;
+| Package | Follows | Policy |
+|---|---|---|
+| [glibc](packages/glibc) | newest `glibc-2.*` | libc ignores its environment, no loader injection |
+| [php](packages/php) | newest `php-8.*` | no PEAR/Phar; exec, native, deserialize, inline and writable scripts require allowances |
+| [openjdk](packages/openjdk) | newest `openjdk-*` | no deserialize or native (Unsafe, FFM, JNI) unless allowed |
+| [python](packages/python) | newest `python-3.*` | no environment, user site, native, deserialize, inline or writable scripts unless allowed |
+
+Package snapshots and release notes remain under `apk/NAME/builds/BUILD-ID/`.
+Legacy `apk/NAME` feeds are maintained for compatibility. Packages keep Wolfi's names;
 our version outranks the Wolfi build it rebuilds, and each provides
 `wolfi-origin:NAME:VERSION` so Werewolf's updater matches Wolfi's CVE fixes. Allowances
 are grouped by capability, pledge-style: an empty file at
@@ -34,8 +39,18 @@ Every ten minutes `refresh.yml` takes one Wolfi snapshot and, for each package:
    apply it, GNU patch with fuzz 2.
 4. **Build** (`build.yml`): Melange on native x86_64 and aarch64 runners, then Wolfi's
    package tests and our own probes against the signed packages.
-5. **Publish** (`publish.py`): a GitHub draft, then R2, then the release. See
+5. **Publish** (`publish.py`, `feed.py`): a GitHub draft, immutable APKs, signed indexes,
+   then the release. Each index update is conditional on the version read; a concurrent
+   publisher re-reads and merges. Existing versions stay available, and a failed
+   package leaves its previous release available while others publish. `feed.py`
+   backfills existing signed releases even when no rebuild is needed. See
    [publishing](docs/design/publishing.md).
+
+Repository order and higher epochs alone do not prevent fallback to a newer Wolfi
+package. Consumers must verify covered package names against the signed hardened
+index, including their versions and control checksums, and fail if the feed is
+unavailable. Explicit older runtime streams and runtimes inside OCI images need their
+own migration; adding this feed does not replace them.
 
 A step that stops a package opens an issue labelled `drift` and `package/NAME`, with the
 version and what failed: a patch that no longer applies quotes patch's output. A patch
