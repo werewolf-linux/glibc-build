@@ -8,6 +8,9 @@ import re
 import shutil
 from derive import fetch
 import patching
+import runtime
+
+check_apk = runtime.check_apk
 
 TITLE = 'PHP'
 FAMILY = 'php-'
@@ -42,7 +45,7 @@ PROBE_PHP, PROBE_SH = 'WEREWOLF_PROBE_PHP', 'WEREWOLF_PROBE_SH'
 GROUPS = ['exec', 'native', 'deserialize', 'inline', 'writable-source']
 
 def grant_all():
-    return ('mkdir -p /etc/runtime-hardening/allow/all/php\n'
+    return (runtime.build_root() + 'mkdir -p /etc/runtime-hardening/allow/all/php\n'
             'for f in ' + ' '.join(GROUPS) + '; do\n'
             '  : > /etc/runtime-hardening/allow/all/php/$f\n'
             'done\n')
@@ -119,7 +122,7 @@ def probe(pkg):
     for text in (php, sh):
         if '${{' in text or PROBE_PHP in text or PROBE_SH in text:
             raise ValueError('tests/probe.* cannot be embedded in a Melange recipe')
-    return ("cat > /tmp/probe.php <<'" + PROBE_PHP + "'\n" + php + PROBE_PHP + '\n' +
+    return (runtime.root_probe('php', ['php', '-v']) + "cat > /tmp/probe.php <<'" + PROBE_PHP + "'\n" + php + PROBE_PHP + '\n' +
             "cat > /tmp/probe.sh <<'" + PROBE_SH + "'\n" + sh + PROBE_SH + '\n' +
             'sh /tmp/probe.sh /tmp/probe.php\n')
 
@@ -166,6 +169,7 @@ def derive(pkg, config, lock):
     test = config['test'] = retained_tests(config)
     test.setdefault('environment', {}).setdefault('contents', {}).setdefault('packages', []).extend(PROBE_PACKAGES)
     test['pipeline'].append({'name': 'Werewolf protections hold, and allowances take each back',
+                             'needs': {'packages': ['build-base']},
                              'runs': probe(pkg)})
     config['update'] = {'enabled': False}
     return config

@@ -14,6 +14,7 @@ Consumers use one feed: **https://dist.werewolf-linux.org/apk/hardened**, with
 | [php](packages/php) | newest `php-8.*` | no PEAR/Phar; exec, native, deserialize, inline and writable scripts require allowances |
 | [openjdk](packages/openjdk) | newest `openjdk-*` | no deserialize or native (Unsafe, FFM, JNI) unless allowed |
 | [python](packages/python) | newest `python-3.*` | no environment, user site, native, deserialize, inline or writable scripts unless allowed |
+| [node](packages/node) | newest `nodejs-*` | no npm, inspector or SEA; exec, native, inline and writable modules require allowances |
 
 Package snapshots and release notes remain under `apk/NAME/builds/BUILD-ID/`.
 Legacy `apk/NAME` feeds are maintained for compatibility. Packages keep Wolfi's names;
@@ -24,6 +25,29 @@ are grouped by capability, pledge-style: an empty file at
 service, read off the read-only root, never from argv or the environment. `<ns>` is the
 service, from `/proc/self/cgroup`. Any distro shipping these packages gets the same
 default-deny and relaxes a knob by creating one file.
+
+Python, PHP, Java and Node refuse initialization when their **effective UID is 0**,
+including embedded runtime initialization. A real UID of 0 with a non-root effective
+UID is allowed. Builds and package tests create a private
+`/etc/runtime-hardening/build-root` marker (root-owned, regular, not writable by group
+or other); it is not a form allowance. Publication rejects any runtime APK containing
+that marker or anything else under `/etc/runtime-hardening`. Production services must
+drop privileges before starting a runtime, including PHP-FPM's master process.
+
+The vocabulary and allowance files are shared; coverage follows each runtime's
+actual execution paths. Current differences remain explicit:
+
+| Capability | Python | PHP | Java | Node |
+|---|---|---|---|---|
+| Effective-root startup refusal | yes | yes | yes | yes |
+| `native` | ctypes | `dl` | Unsafe, JNI, FFM | addons, FFI, WASI, native loaders |
+| `exec` runtime floor | leash only | yes | leash only | yes, including package scripts |
+| `inline` | argv/stdin | argv | deferred | argv/stdin, worker eval, data-URL code |
+| `writable-source` | main script | compiled files | deferred | ordinary main/dependency code, disk cache |
+| `deserialize` | pickle globals | object reconstruction | ObjectInputStream | no equivalent object-gadget API |
+
+In-process code provenance (`eval`, `vm`, generated classes and custom loaders)
+remains separate work. These defaults complement the service's kernel restrictions.
 
 ## How it works
 

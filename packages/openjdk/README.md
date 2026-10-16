@@ -1,7 +1,7 @@
 # openjdk
 
 Werewolf's OpenJDK: Wolfi's newest stable `openjdk-27` recipe, captured unchanged,
-plus six policy patches
+plus policy patches
 ([design](https://github.com/werewolf-linux/werewolf/blob/main/docs/design/hardened-interpreters.md)).
 Packages keep Wolfi's names, so forms that install `openjdk-27` or its `-jre` and
 `-default-jdk` subpackages get it.
@@ -49,6 +49,9 @@ image builds and the retained packages' tests.
 
 ## Behavior changes for applications
 
+- VM creation refuses effective UID 0, including through `JNI_CreateJavaVM`.
+  Start the JVM after dropping root. The shared build-only marker described in the
+  repository README is absent from every shipped APK.
 - `JAVA_TOOL_OPTIONS`, `_JAVA_OPTIONS`, `JDK_JAVA_OPTIONS` and `JDK_ALTERNATE_VM` have
   no effect. Put the options on the command line or in an `@argfile` the command names.
 - `--enable-native-access` on the command line grants nothing; use

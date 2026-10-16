@@ -7,6 +7,11 @@ Packages keep Wolfi's names, so forms that install `php-8.5` or its extensions g
 
 ## Differences from Wolfi's build
 
+Module startup refuses effective UID 0 for CLI, FPM and embedded PHP. PHP-FPM must
+start as its service user; a root master that drops privileges later is refused.
+The repository README describes the build-only marker; the APKs cannot contain it
+or grant their own allowances.
+
 Same as Wolfi: source commit, Wolfi's two patches, toolchain, and the retained CLI,
 FPM and extension build options and tests.
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Give the CI bubblewrap copy only the extra child capability APK bootstrap needs."""
+"""Give the private runner chroot and the identity changes its UID probes need."""
 import os
 from pathlib import Path
 import re
@@ -26,7 +26,7 @@ def profile(template, executable):
         ('&bwrap//&unpriv_bwrap', '&hardened_packages_bwrap//&hardened_packages_bwrap_child'),
         (marker, 'profile hardened_packages_bwrap_child flags='),
         ('&unpriv_bwrap', '&hardened_packages_bwrap_child'),
-        ('audit deny capability,', 'allow capability sys_chroot,'),
+        ('audit deny capability,', 'allow capability sys_chroot,\n    allow capability setuid,\n    allow capability setgid,'),
         ('include if exists <local/bwrap-userns-restrict>', ''),
         ('include if exists <local/unpriv_bwrap>', ''),
     ]
@@ -50,7 +50,7 @@ def main():
     target = executable.with_suffix('.apparmor')
     target.write_text(policy)
     subprocess.run(['/usr/sbin/apparmor_parser', '--replace', str(target)], check=True, timeout=30)
-    print('setup-runner: loaded a private bubblewrap profile with child sys_chroot')
+    print('setup-runner: private child capabilities: sys_chroot, setuid, setgid')
 
 
 if __name__ == '__main__':

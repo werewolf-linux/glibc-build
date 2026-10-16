@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SHARED = ['Makefile', 'requirements.txt', 'tools.lock.json', 'release/packages.pub',
           'scripts/packages.py', 'scripts/inputs.py', 'scripts/refresh.py', 'scripts/derive.py',
           'scripts/patching.py', 'scripts/source.py', 'scripts/prepare.py', 'scripts/verify.py',
-          'scripts/build.py', 'scripts/signing-key.py', 'scripts/install-melange.py',
+          'scripts/build.py', 'scripts/runtime.py', 'scripts/signing-key.py', 'scripts/install-melange.py',
           'scripts/setup-runner.py', '.github/workflows/build.yml']
 # Within a package's directory, what documents it rather than builds it.
 DOCUMENTS = ['README.md', 'docs', 'tools']

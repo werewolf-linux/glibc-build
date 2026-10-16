@@ -30,6 +30,8 @@ class RunnerProfile(unittest.TestCase):
         self.assertIn('profile hardened_packages_bwrap "' + str(executable.resolve()) + '"', result)
         child = result.split('profile hardened_packages_bwrap_child flags=', 1)[1]
         self.assertIn('allow capability sys_chroot,', child)
+        self.assertIn('allow capability setuid,', child)
+        self.assertIn('allow capability setgid,', child)
         self.assertNotIn('allow capability,', child)
         self.assertNotIn('unconfined', result)
         self.assertNotIn('local/', result)

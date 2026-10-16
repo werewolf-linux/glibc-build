@@ -7,6 +7,9 @@ import re
 import shutil
 from derive import fetch
 import patching
+import runtime
+
+check_apk = runtime.check_apk
 
 TITLE = 'Python'
 FAMILY = 'python-'
@@ -27,7 +30,7 @@ PROBE_PY, PROBE_SH = 'WEREWOLF_PROBE_PY', 'WEREWOLF_PROBE_SH'
 GROUPS = ['native', 'deserialize', 'inline', 'writable-source', 'environment']
 
 def grant_all():
-    return ('mkdir -p /etc/runtime-hardening/allow/all/python\n'
+    return (runtime.build_root() + 'mkdir -p /etc/runtime-hardening/allow/all/python\n'
             'for f in ' + ' '.join(GROUPS) + '; do\n'
             '  : > /etc/runtime-hardening/allow/all/python/$f\n'
             'done\n')
@@ -79,7 +82,7 @@ def probe(pkg):
     for text in (py, sh):
         if '${{' in text or PROBE_PY in text or PROBE_SH in text:
             raise ValueError('tests/probe.* cannot be embedded in a Melange recipe')
-    return ("mkdir -p /tmp/probe\n"
+    return (runtime.root_probe('python', ['python3', '-V']) + "mkdir -p /tmp/probe\n"
             "cat > /tmp/probe/probe.py <<'" + PROBE_PY + "'\n" + py + PROBE_PY + '\n' +
             "cat > /tmp/probe/probe.sh <<'" + PROBE_SH + "'\n" + sh + PROBE_SH + '\n' +
             'sh /tmp/probe/probe.sh /tmp/probe/probe.py\n')
@@ -128,6 +131,7 @@ def derive(pkg, config, lock):
         section.setdefault('dependencies', {}).setdefault('provides', []).append(
             'wolfi-origin:' + original + ':' + wolfi)
     config['test']['pipeline'].append({'name': 'Werewolf protections hold, and allowances take each back',
+                                       'needs': {'packages': ['build-base']},
                                        'runs': probe(pkg)})
     config['update'] = {'enabled': False}
     return config

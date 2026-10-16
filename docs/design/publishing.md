@@ -60,8 +60,9 @@ hidden marker finds the open issue, so a new failure comments on it.
 
 **Builds** (`build.yml`) run Melange in bubblewrap on `ubuntu-26.04` and
 `ubuntu-26.04-arm`. Ubuntu's AppArmor child profile denies the `sys_chroot` APK's
-bootstrap test needs; a private bubblewrap copy gets a profile allowing only that, and
-the system binary is checked to still refuse it. Package tests, Wolfi's and our probes,
+bootstrap test needs; a private bubblewrap copy gets a profile allowing `sys_chroot`,
+`setuid` and `setgid`. The latter two let runtime probes verify real/effective UID
+mismatches. The system binary is checked to still refuse chroot. Package tests, Wolfi's and our probes,
 run as a separate Melange command against the signed packages.
 
 **Publication** (`publish.py`) checks build records, APK signatures, payload hashes,

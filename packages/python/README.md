@@ -7,6 +7,10 @@ Packages keep Wolfi's names, so forms that install `python-3.15` or `python3` ge
 
 ## Differences from Wolfi's build
 
+Interpreter preinitialization refuses effective UID 0, including embedded Python.
+Start it after dropping root. The repository README describes the build-only marker;
+the APKs cannot contain it or grant their own allowances.
+
 Same as Wolfi: source commit, Wolfi's patches, toolchain, configure options but one,
 the ordinary interpreter's PGO run, and the retained packages' tests.
 

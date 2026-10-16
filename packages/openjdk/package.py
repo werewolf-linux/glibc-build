@@ -7,6 +7,9 @@ import re
 import shutil
 from derive import fetch
 import patching
+import runtime
+
+check_apk = runtime.check_apk
 
 TITLE = 'OpenJDK'
 FAMILY = 'openjdk-'
@@ -20,6 +23,7 @@ OMITTED_SUBPACKAGES = tuple('${{package.name}}' + suffix for suffix in (
     '-jmods', '-demos', '-oci-entrypoint-compat'))
 BUILD = 'make jdk-image legacy-jre-image jmods'
 PRUNE = 'Remove demos before packaging the JDK'
+ALLOW_ROOT = 'Permit effective root only in the build guest'
 
 def checkout(config):
     """Wolfi's one git-checkout step: its index and the step."""
@@ -78,7 +82,7 @@ def probe(pkg):
     for text in (java, sh):
         if '${{' in text or PROBE_JAVA in text or PROBE_SH in text:
             raise ValueError('tests/Probe.java and tests/probe.sh cannot be embedded in a Melange recipe')
-    return ('work=$(mktemp -d)\n'
+    return (runtime.root_probe('java', ['java', '-version']) + 'work=$(mktemp -d)\n'
             "cat > \"$work/Probe.java\" <<'" + PROBE_JAVA + "'\n" + java + PROBE_JAVA + '\n' +
             "cat > \"$work/probe.sh\" <<'" + PROBE_SH + "'\n" + sh + PROBE_SH + '\n' +
             'sh "$work/probe.sh" "$work"\n')
@@ -99,6 +103,7 @@ def derive(pkg, config, lock):
     if not patched or patched[0] < index:
         raise ValueError('Review changed upstream patch steps before deriving')
     pipeline.insert(patched[-1] + 1, patching.step(PATCHES))
+    pipeline.insert(patched[-1] + 2, {'name': ALLOW_ROOT, 'runs': runtime.build_root()})
     omit_jmods(pipeline)
     pipeline.append(prune())
     config['subpackages'] = retained_subpackages(config)
@@ -118,8 +123,16 @@ def derive(pkg, config, lock):
     if 'openjdk-${{vars.java-version}}-default-jdk' not in test.get('environment', {}).get('contents', {}).get('packages', []):
         raise ValueError('Review changed upstream package test environment: the probe needs the JDK')
     test['pipeline'].append({'name': 'Werewolf protections hold, and allowances take each back',
+                             'needs': {'packages': ['build-base']},
                              'runs': probe(pkg)})
     config['update'] = {'enabled': False}
+    return config
+
+def test_recipe(config, repository):
+    for section in [config] + config.get('subpackages', []):
+        test = section.get('test')
+        if test and test.get('pipeline'):
+            test['pipeline'].insert(0, {'name': ALLOW_ROOT, 'runs': runtime.build_root()})
     return config
 
 def check(pkg, upstream, derived):
@@ -137,8 +150,10 @@ def check(pkg, upstream, derived):
     omit_jmods(expected['pipeline'])
     steps = lambda c: [x for x in c['pipeline']
                        if x.get('uses') != 'git-checkout'
-                       and x.get('name') not in ('Apply Werewolf policy patches', 'Fetch the locked source commit', PRUNE)]
+                       and x.get('name') not in ('Apply Werewolf policy patches', 'Fetch the locked source commit', PRUNE, ALLOW_ROOT)]
     assert steps(expected) == steps(derived), 'an upstream build step changed'
+    assert [s for s in derived['pipeline'] if s.get('name') == ALLOW_ROOT] == [
+        {'name': ALLOW_ROOT, 'runs': runtime.build_root()}], 'build-root marker missing or changed'
     assert derived['vars'] == {k: v for k, v in upstream['vars'].items() if k != 'cacert-entrypoint-hash'}, 'upstream variables changed'
     strip = lambda subs: [{**s, 'dependencies': {**s.get('dependencies', {}), 'provides': [
         p for p in s.get('dependencies', {}).get('provides', []) if not p.startswith('wolfi-origin:')]}}

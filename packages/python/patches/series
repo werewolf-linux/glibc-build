@@ -3,3 +3,4 @@
 0003-native.patch
 0004-deserialize-pickle.patch
 0005-run-gate.patch
+0006-refuse-effective-root.patch
