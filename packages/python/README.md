@@ -7,11 +7,10 @@ Packages keep Wolfi's names, so forms that install `python-3.15` or `python3` ge
 
 ## Differences from Wolfi's build
 
-Same as Wolfi: source commit, Wolfi's patches, toolchain, configure options but one, the
-PGO run, the free-threaded and JIT builds, every subpackage and package test.
+Same as Wolfi: source commit, Wolfi's patches, toolchain, configure options but one,
+the ordinary interpreter's PGO run, and the retained packages' tests.
 
-- **Patches** (`patches/series`), applied after Wolfi's and before the free-threaded and
-  JIT builds copy the tree:
+- **Patches** (`patches/series`), applied after Wolfi's and before configuring Python:
   1. `-E -s` by default: `PYTHON*` variables are ignored unless the image allows the
      environment; the user site always is.
   2. No working directory on `sys.path` for `-m`, `-c` or stdin; a script keeps its own
@@ -23,6 +22,16 @@ PGO run, the free-threaded and JIT builds, every subpackage and package test.
      main script whose file is on a writable mount (so `/data` and `/tmp` are refused).
 - **Configure**: no `--enable-loadable-sqlite-extensions`; `sqlite3` loads no native
   code.
+- **Packages**: ship `python-3.15`, `python-3.15-base`, `python-3.15-dev` and
+  `python-3.15-base-dev`. The development packages remain available for application
+  builds: Open WebUI and Paperless already build with Python development headers.
+  Runtime images need only the interpreter. Omit the free-threaded
+  (`python-3.15t`) and experimental JIT interpreters, their source-tree copies,
+  Tkinter (`-tk`) and manpages (`-doc`). GUI and manpage files are removed before
+  packaging so they cannot fall back into the main or base package.
+  Also omit `-privileged-netbindservice`, which puts `CAP_NET_BIND_SERVICE` on
+  the interpreter file. Werewolf's service launcher grants that capability when
+  a service declares a port below 1024; Python needs no special binary.
 - **Allowances**: a capability group is an empty file, never a symlink, at
   `/etc/runtime-hardening/allow/<ns>/python/GROUP` or `.../all/python/GROUP`, read with
   `lstat`. `<ns>` is the service from `/proc/self/cgroup`. The build guest grants every
@@ -31,8 +40,8 @@ PGO run, the free-threaded and JIT builds, every subpackage and package test.
   each group, and only a regular file, take its own back.
 - **Packaging**: epoch `1000 × policy.json revision + Wolfi epoch` sorts above every
   Wolfi rebuild; each package provides `wolfi-origin:python-3.15:VERSION-rEPOCH` for CVE
-  matching. Derivation stops for review when the checkout, the patch or clone order, the
-  removed option or the package identity changes.
+  matching. Derivation stops for review when the checkout, the patch or clone order,
+  the subpackage names, the removed option or the package identity changes.
 
 ## Behavior changes for applications
 

@@ -15,7 +15,11 @@ UPSTREAM = 'https://github.com/python/cpython'
 PATCHES = 'werewolf/patches'  # in the build context
 # The configure option this build leaves out: sqlite3 loading native code.
 REMOVED_OPTION = '--enable-loadable-sqlite-extensions'
+KEPT_SUBPACKAGES = tuple('${{package.name}}' + suffix for suffix in ('-base', '-dev', '-base-dev'))
+OMITTED_SUBPACKAGES = tuple('${{package.name}}' + suffix for suffix in (
+    't', '-jit', '-privileged-netbindservice', '-tk', '-doc'))
 CLONE = 'Clone patched source for no-GIL and JIT builds'
+PRUNE = 'Remove GUI and documentation files before splitting packages'
 ALLOW = 'Allow every runtime-hardening group in the build guest only'
 PROBE_PY, PROBE_SH = 'WEREWOLF_PROBE_PY', 'WEREWOLF_PROBE_SH'
 # Every build-guest group, also granted in the test environment so Wolfi's own
@@ -53,6 +57,22 @@ def context(pkg, destination):
     # Beside Wolfi's files, under a name CPython does not use at its top.
     shutil.copytree(pkg.dir / 'patches', destination / PATCHES)
 
+def retained_subpackages(config):
+    # Publish the ordinary interpreter and development packages only. New or
+    # renamed upstream subpackages need review before we choose to ship them.
+    subpackages = config['subpackages']
+    if sorted(s['name'] for s in subpackages) != sorted(KEPT_SUBPACKAGES + OMITTED_SUBPACKAGES):
+        raise ValueError('Review changed upstream subpackages')
+    return [s for s in subpackages if s['name'] in KEPT_SUBPACKAGES]
+
+def prune():
+    # Without Wolfi's -tk and -doc split steps these files would stay in the
+    # main/base packages. Missing paths fail the build for upstream review.
+    return {'name': PRUNE, 'runs':
+            'rm -R "${{targets.destdir}}/usr/lib/${{vars.python}}/tkinter"\n'
+            'rm "${{targets.destdir}}/usr/lib/${{vars.python}}/lib-dynload"/_tkinter.*.so\n'
+            'rm -R "${{targets.destdir}}/usr/share/man"\n'}
+
 def probe(pkg):
     py = (pkg.dir / 'tests/probe.py').read_text()
     sh = (pkg.dir / 'tests/probe.sh').read_text()
@@ -75,13 +95,14 @@ def derive(pkg, config, lock):
     if source.get('repository') != UPSTREAM or set(source) - {'branch', 'tag', 'expected-commit', 'repository'}:
         raise ValueError('Review changed upstream source checkout before deriving')
     pipeline[at] = fetch(lock['source_commit'], pkg.sources(lock))
-    # Wolfi's patches first, as Wolfi applies them; then ours, before the
-    # free-threaded and JIT builds copy the patched tree.
+    # Wolfi's patches first, then ours, before configuring ordinary Python.
+    # Recognize the variant clone step before removing it with the variants.
     patched = [i for i, step in enumerate(pipeline) if step.get('uses') == 'patch']
     clones = [i for i, step in enumerate(pipeline) if step.get('name') == CLONE]
     configures = [i for i, step in enumerate(pipeline) if step.get('uses') == 'autoconf/configure']
     if not patched or len(clones) != 1 or not configures or not patched[-1] < clones[0] < configures[0]:
         raise ValueError('Review changed upstream patch and clone steps before deriving')
+    pipeline.pop(clones[0])
     # The build runs the new python on build-tree scripts (writable-source),
     # with -c (inline), importing every extension it built (native), and its
     # PGO suite unpickles (deserialize) and sets PYTHON* variables
@@ -96,6 +117,8 @@ def derive(pkg, config, lock):
     config['vars']['python-config'], count = line.subn('', options)
     if count != 1:
         raise ValueError('Review changed upstream configure option ' + REMOVED_OPTION + ' before deriving')
+    config['subpackages'] = retained_subpackages(config)
+    pipeline.append(prune())
     wolfi = str(config['package']['version']) + '-r' + str(config['package']['epoch'])
     config['package']['epoch'] = epoch(config['package']['epoch'], lock['revision'])
     config['package']['description'] += ' (Werewolf fixed hardening policy)'
@@ -122,7 +145,7 @@ def test_recipe(config, repository):
     return config
 
 def check(pkg, upstream, derived):
-    """Raise AssertionError unless derived keeps everything Wolfi builds with."""
+    """Keep Wolfi's ordinary build and tests, apart from the documented omissions."""
     options = lambda c: c['vars']['python-config'].splitlines()
     kept = [o for o in options(upstream) if REMOVED_OPTION not in o]
     assert options(derived) == kept, 'upstream configure options changed beyond the removed one'
@@ -133,13 +156,16 @@ def check(pkg, upstream, derived):
     names = [x.get('name') for x in derived['pipeline']]
     ours = names.index('Apply Werewolf policy patches')
     assert derived['pipeline'][ours - 1] == patches(upstream)[-1], "our patches must follow Wolfi's"
-    assert ours < names.index(CLONE), 'the free-threaded and JIT builds must copy the patched tree'
-    ours_only = ('Apply Werewolf policy patches', ALLOW, 'Fetch the locked source commit')
-    steps = lambda c: [x for x in c['pipeline'] if x.get('name') not in ours_only and x.get('uses') != 'git-checkout']
-    assert steps(upstream) == steps(derived), 'an upstream build step changed'
+    assert CLONE not in names, 'the omitted variants must not clone the source tree'
+    assert derived['pipeline'][-1] == prune(), 'GUI and documentation files must be removed before splitting'
+    assert sum(name == PRUNE for name in names) == 1, 'one GUI and documentation cleanup step'
+    ours_only = ('Apply Werewolf policy patches', ALLOW, PRUNE, 'Fetch the locked source commit')
+    steps = lambda c, omitted: [x for x in c['pipeline']
+                               if x.get('name') not in omitted and x.get('uses') != 'git-checkout']
+    assert steps(upstream, (CLONE,)) == steps(derived, ours_only), 'an upstream build step changed'
     strip = lambda subs: [{**s, 'dependencies': {**s.get('dependencies', {}), 'provides': [
         p for p in s.get('dependencies', {}).get('provides', []) if not p.startswith('wolfi-origin:')]}}
         for s in subs]
-    assert strip(upstream['subpackages']) == strip(derived['subpackages']), 'an upstream subpackage changed'
+    assert strip(retained_subpackages(upstream)) == strip(derived['subpackages']), 'an upstream subpackage changed'
     for test in upstream['test']['pipeline']:
         assert test in derived['test']['pipeline'], "Wolfi's package test removed"

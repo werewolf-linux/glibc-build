@@ -2,6 +2,7 @@ import copy
 import json
 from pathlib import Path
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -11,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / 'scripts'))
 import derive
 import packages
+import publish
 import verify
 
 HERE = Path(__file__).resolve().parent
@@ -45,7 +47,10 @@ class Derivation(unittest.TestCase):
         self.assertEqual('python-3.15', derived['package']['name'])
         self.assertEqual(1000, derived['package']['epoch'])
         self.assertEqual('3.15.0_git20261010-r1000', pkg.hooks.full_version(LOCK))
-        self.assertEqual([s['name'] for s in FIXTURE['subpackages']], [s['name'] for s in derived['subpackages']])
+        self.assertEqual(['${{package.name}}-base', '${{package.name}}-dev', '${{package.name}}-base-dev'],
+                         [s['name'] for s in derived['subpackages']])
+        self.assertEqual({'python-3.15', 'python-3.15-base', 'python-3.15-dev', 'python-3.15-base-dev'},
+                         publish.package_names(derived))
         for section in [derived['package']] + derived['subpackages']:
             self.assertIn('wolfi-origin:python-3.15:3.15.0_git20261010-r0', section['dependencies']['provides'])
 
@@ -55,12 +60,13 @@ class Derivation(unittest.TestCase):
         self.assertIn(COMMIT, derived['pipeline'][0]['runs'])
         self.assertFalse([s for s in derived['pipeline'] if s.get('uses') == 'git-checkout'])
 
-    def test_our_patches_follow_wolfis_and_reach_the_free_threaded_and_jit_builds(self):
+    def test_our_patches_follow_wolfis_before_configuring_the_ordinary_interpreter(self):
         _, _, derived = self.derived()
         names = self.names(derived)
         ours = names.index('Apply Werewolf policy patches')
         self.assertEqual('patch', derived['pipeline'][ours - 1]['uses'])
-        self.assertLess(ours, names.index('Clone patched source for no-GIL and JIT builds'))
+        self.assertLess(ours, names.index('autoconf/configure'))
+        self.assertNotIn('Clone patched source for no-GIL and JIT builds', names)
         self.assertLess(names.index('Allow every runtime-hardening group in the build guest only'),
                         names.index('autoconf/configure'))
 
@@ -98,6 +104,37 @@ class Derivation(unittest.TestCase):
         pkg, upstream, derived = self.derived()
         verify.check(pkg, upstream, derived)
 
+    def test_verify_refuses_restoring_any_omitted_subpackage(self):
+        pkg, upstream, derived = self.derived()
+        for sub in upstream['subpackages']:
+            if sub['name'] in [s['name'] for s in derived['subpackages']]:
+                continue
+            restored = copy.deepcopy(derived)
+            restored['subpackages'].append(copy.deepcopy(sub))
+            with self.subTest(sub=sub['name']), self.assertRaisesRegex(AssertionError, 'subpackage'):
+                verify.check(pkg, upstream, restored)
+
+    def test_cleanup_discards_gui_and_manpages_but_preserves_runtime_and_headers(self):
+        pkg, _, derived = self.derived()
+        # Main-pipeline cleanup runs before Melange splits files into base/dev.
+        root = Path(self.directory.name) / 'installed files'
+        kept = ['usr/lib/python3.15/os.py',
+                'usr/lib/python3.15/lib-dynload/_sqlite3.cpython-315.so',
+                'usr/include/python3.15/Python.h', 'usr/bin/python3.15']
+        removed = ['usr/lib/python3.15/tkinter/__init__.py',
+                   'usr/lib/python3.15/tkinter/__pycache__/__init__.cpython-315.pyc',
+                   'usr/lib/python3.15/lib-dynload/_tkinter.cpython-315-aarch64-linux-gnu.so',
+                   'usr/share/man/man1/python3.15.1']
+        for name in kept + removed:
+            path = root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.touch()
+        self.assertEqual(pkg.hooks.PRUNE, derived['pipeline'][-1]['name'])
+        script = derived['pipeline'][-1]['runs'].replace('${{targets.destdir}}', str(root)).replace(
+            '${{vars.python}}', 'python3.15')
+        subprocess.run(['sh', '-eu', '-c', script], check=True)
+        self.assertEqual(set(kept), {str(p.relative_to(root)) for p in root.rglob('*') if p.is_file()})
+
     def test_changed_recipes_stop_the_derivation_for_review(self):
         def repository(recipe):
             recipe['pipeline'][0]['with']['repository'] = 'https://example.com/cpython'
@@ -120,7 +157,18 @@ class Derivation(unittest.TestCase):
         def second_checkout(recipe):
             recipe['pipeline'].insert(1, copy.deepcopy(recipe['pipeline'][0]))
 
-        for change in [repository, option, clone, late_patch, name, second_checkout]:
+        def privileged_subpackage(recipe):
+            next(s for s in recipe['subpackages']
+                 if s['name'] == '${{package.name}}-privileged-netbindservice')['name'] += '-changed'
+
+        def unknown_subpackage(recipe):
+            recipe['subpackages'].append({'name': '${{package.name}}-new'})
+
+        def missing_subpackage(recipe):
+            recipe['subpackages'].pop()
+
+        for change in [repository, option, clone, late_patch, name, second_checkout,
+                       privileged_subpackage, unknown_subpackage, missing_subpackage]:
             with self.subTest(change.__name__), self.assertRaisesRegex(ValueError, 'Review'):
                 self.derived(change)
 
@@ -135,6 +183,10 @@ class Derivation(unittest.TestCase):
             lambda d: d['environment']['contents']['packages'].remove('build-base'),
             lambda d: d['test']['pipeline'].pop(0),
             lambda d: d['subpackages'][0]['pipeline'].pop(),
+            lambda d: d['pipeline'].pop(),
+            lambda d: d['pipeline'][-1].update(runs='true\n'),
+            lambda d: d['pipeline'].insert(0, copy.deepcopy(next(s for s in upstream['pipeline']
+                if s.get('name') == 'Clone patched source for no-GIL and JIT builds'))),
             lambda d: d['vars'].update({'python-config': d['vars']['python-config'] + '--enable-loadable-sqlite-extensions \\\n'}),
             lambda d: d.update(update={'enabled': True}),
         ]:

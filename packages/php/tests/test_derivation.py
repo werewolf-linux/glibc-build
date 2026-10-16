@@ -2,6 +2,7 @@ import copy
 import json
 from pathlib import Path
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -40,7 +41,7 @@ class Derivation(unittest.TestCase):
         _, derived = self.derived()
         self.assertEqual('php-8.5', derived['package']['name'])
         self.assertEqual(1003, derived['package']['epoch'])
-        self.assertEqual([s['name'] for s in FIXTURE['subpackages'] if s['name'] not in PHP.hooks.REMOVED],
+        self.assertEqual([s['name'] for s in FIXTURE['subpackages'] if s['name'] not in PHP.hooks.OMITTED_SUBPACKAGES],
                          [s['name'] for s in derived['subpackages']])
         for section in [derived['package']] + derived['subpackages']:
             self.assertIn('wolfi-origin:php-8.5:8.5.11-r3', section['dependencies']['provides'])
@@ -68,6 +69,36 @@ class Derivation(unittest.TestCase):
         for name, flag in PHP.hooks.REMOVED.items():
             self.assertNotIn(flag, configure)
             self.assertNotIn(name, [s['name'] for s in derived['subpackages']])
+        for flag in PHP.hooks.OMITTED_EXTENSIONS.values():
+            self.assertNotIn(flag, configure)
+        self.assertIn('--disable-cgi \\\n', configure)
+        self.assertIn('--disable-phar \\\n', configure)
+        self.assertIn('--enable-cli \\\n', configure)
+        self.assertIn('--enable-fpm \\\n', configure)
+        self.assertFalse(any(s.get('name') in PHP.hooks.APXS_STEPS for s in derived['pipeline']))
+
+    def test_only_the_omitted_tidy_test_and_dependency_are_removed(self):
+        upstream, derived = self.derived()
+        expected = [s for s in upstream['test']['pipeline'] if s.get('uses') != 'test/php-tidy']
+        self.assertEqual(expected, derived['test']['pipeline'][:-1])
+        packages = derived['test']['environment']['contents']['packages']
+        self.assertNotIn('${{package.name}}-tidy', packages)
+        self.assertNotIn('${{package.name}}-phar', packages)
+
+    def test_manpage_cleanup_preserves_runtime_modules_and_headers(self):
+        derived = self.derived()[1]
+        self.assertEqual(PHP.hooks.PRUNE, derived['pipeline'][-1]['name'])
+        with tempfile.TemporaryDirectory(prefix='php installed ') as directory:
+            root = Path(directory)
+            kept = ['usr/bin/php', 'usr/bin/php-fpm', 'usr/include/php/main/php.h',
+                    'usr/lib/php/modules/pdo.so', 'usr/lib/php/modules/ldap.so']
+            for name in kept + ['usr/share/man/man1/php.1', 'usr/share/man/man8/php-fpm.8']:
+                path = root / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.touch()
+            script = derived['pipeline'][-1]['runs'].replace('${{targets.destdir}}', str(root))
+            subprocess.run(['sh', '-eu', '-c', script], check=True)
+            self.assertEqual(set(kept), {str(p.relative_to(root)) for p in root.rglob('*') if p.is_file()})
 
     def test_test_recipe_grants_every_group_in_each_test_environment(self):
         import copy as _copy
@@ -116,7 +147,18 @@ class Derivation(unittest.TestCase):
             recipe['pipeline'].insert(3, recipe['pipeline'].pop(1))
         def name(recipe):
             recipe['package']['name'] = 'php-8.6'
-        for change in [checkout, flag, subpackage, depends, patches, name]:
+        def new_extension(recipe):
+            recipe['data'][0]['items']['new'] = 'Needs a consumer'
+        def new_subpackage(recipe):
+            recipe['subpackages'].append({'name': '${{package.name}}-new'})
+        def cgi(recipe):
+            next(s for s in recipe['pipeline'] if s.get('name') == 'Configure')['runs'] += '--enable-cgi\n'
+        def apache_step(recipe):
+            recipe['pipeline'] = [s for s in recipe['pipeline'] if s.get('name') != PHP.hooks.APXS_STEPS[0]]
+        def tidy_test(recipe):
+            recipe['test']['pipeline'] = [s for s in recipe['test']['pipeline'] if s.get('uses') != 'test/php-tidy']
+        for change in [checkout, flag, subpackage, depends, patches, name,
+                       new_extension, new_subpackage, cgi, apache_step, tidy_test]:
             with self.subTest(change.__name__), self.assertRaisesRegex(ValueError, 'Review'):
                 self.derived(change)
 
@@ -132,6 +174,13 @@ class Derivation(unittest.TestCase):
             lambda d: d['test']['pipeline'].pop(0),
             lambda d: d.update(update={'enabled': True}),
             lambda d: d['pipeline'].remove(patching.step('werewolf/patches')),
+            lambda d: d['pipeline'].pop(),
+            lambda d: d['pipeline'][-1].update(runs='true\n'),
+            lambda d: d['data'][0]['items'].update({'phar': 'PHP Archive'}),
+            lambda d: d['subpackages'].append(copy.deepcopy(next(s for s in upstream['subpackages']
+                if s['name'] == '${{package.name}}-cgi'))),
+            lambda d: next(s for s in d['pipeline'] if s.get('name') == 'Configure').update(
+                runs=next(s for s in d['pipeline'] if s.get('name') == 'Configure')['runs'].replace('--disable-phar', '')),
         ]:
             relaxed = copy.deepcopy(derived)
             relax(relaxed)
@@ -150,11 +199,15 @@ class Derivation(unittest.TestCase):
 
     def test_every_range_and_named_subpackage_is_published(self):
         names = publish.package_names(self.derived()[1])
-        for name in ['php-8.5', 'php-8.5-fpm', 'php-8.5-phar', 'php-8.5-phar-config']:
+        for name in ['php-8.5', 'php-8.5-fpm', 'php-8.5-pcntl', 'php-8.5-pcntl-config',
+                     'php-8.5-dev', 'php-8.5-sysvsem', 'php-8.5-soap', 'php-8.5-ldap']:
             self.assertIn(name, names)
-        self.assertNotIn('php-8.5-dbg', names)
-        extensions = len(FIXTURE['data'][0]['items'])
-        self.assertEqual(1 + 2 * extensions + len(FIXTURE['subpackages']) - 2 - 2, len(names))
+        omitted = {'dbg', 'pear', 'apache', 'cgi', 'doc', 'bz2', 'gettext', 'pdo_dblib', 'pdo_odbc',
+                   'odbc', 'sockets', 'tidy', 'xsl', 'ftp', 'sysvshm', 'phar'}
+        for suffix in omitted:
+            self.assertNotIn('php-8.5-' + suffix, names)
+            self.assertNotIn('php-8.5-' + suffix + '-config', names)
+        self.assertEqual(67, len(names))
 
 
 if __name__ == '__main__':

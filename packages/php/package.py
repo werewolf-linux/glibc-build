@@ -2,6 +2,7 @@
 
 The hooks scripts/packages.py names. Packages keep Wolfi's names; their epoch
 sorts above every Wolfi rebuild of the same PHP release."""
+from copy import deepcopy
 from pathlib import Path
 import re
 import shutil
@@ -15,14 +16,30 @@ UPSTREAM = 'https://github.com/php/php-src'
 PATCHES = 'werewolf/patches'  # in the build context
 # What the build leaves out, and the configure flag that builds each.
 REMOVED = {'${{package.name}}-dbg': '--enable-phpdbg=shared',  # phpdbg, an interactive debugger
-           '${{package.name}}-pear': '--with-pear'}  # PEAR, which installs code from the network
-# The package test loads these, so the probe sees their functions and wrapper held.
-PROBE_PACKAGES = ['${{package.name}}-pcntl', '${{package.name}}-phar']
+           '${{package.name}}-pear': '--with-pear',  # PEAR, which installs code from the network
+           '${{package.name}}-apache': '--with-apxs2=/usr/bin/apxs'}
+OMITTED_SUBPACKAGES = tuple(REMOVED) + ('${{package.name}}-cgi', '${{package.name}}-doc')
+KEPT_SUBPACKAGES = tuple('${{package.name}}' + suffix for suffix in (
+    '-config', '-${{range.key}}', '-${{range.key}}-config', '-dev', '-fpm', '-fpm-config'))
+# Current app forms use these. New extensions require an identified consumer.
+KEPT_EXTENSIONS = frozenset('''bcmath calendar ctype curl dom exif fileinfo gd gmp iconv intl
+    ldap mbstring mysqli mysqlnd openssl pcntl pdo pdo_mysql pdo_pgsql pdo_sqlite pgsql
+    posix simplexml soap sodium sysvsem xml xmlreader xmlwriter zip'''.split())
+OMITTED_EXTENSIONS = {
+    'bz2': '--with-bz2=shared', 'gettext': '--with-gettext=shared',
+    'pdo_dblib': '--with-pdo-dblib=shared', 'pdo_odbc': '--with-pdo-odbc=shared,unixODBC,/usr',
+    'odbc': '--with-unixODBC=shared,/usr', 'sockets': '--enable-sockets=shared',
+    'tidy': '--with-tidy=shared,/usr', 'xsl': '--with-xsl=shared',
+    'ftp': '--enable-ftp=shared', 'sysvshm': '--enable-sysvshm=shared', 'phar': '--enable-phar=shared'}
+APXS_STEPS = ('Copy httpd.conf before install for apxs', 'Remove httpd.conf after install for apxs')
+PRUNE = 'Remove manpages before splitting packages'
+# The probe checks pcntl's functions, and that Phar is absent even with an allowance.
+PROBE_PACKAGES = ['${{package.name}}-pcntl']
 PROBE_PHP, PROBE_SH = 'WEREWOLF_PROBE_PHP', 'WEREWOLF_PROBE_SH'
 # Capability groups granted in every test environment so Wolfi's own tests
 # (and the subpackages') run `php`, scripts and unserialize; the probe clears
 # them and proves deny-by-default. PHP has no `environment` group.
-GROUPS = ['exec', 'native', 'deserialize', 'phar', 'inline', 'writable-source']
+GROUPS = ['exec', 'native', 'deserialize', 'inline', 'writable-source']
 
 def grant_all():
     return ('mkdir -p /etc/runtime-hardening/allow/all/php\n'
@@ -47,6 +64,54 @@ def full_version(lock):
 def context(pkg, destination):
     # Beside Wolfi's files, under a name php-src does not use at its top.
     shutil.copytree(pkg.dir / 'patches', destination / PATCHES)
+
+def configure_without_omissions(script):
+    if re.search(r'--(?:enable|disable)-cgi\b', script):
+        raise ValueError('Review changed upstream CGI configuration')
+    for flag in list(REMOVED.values()) + list(OMITTED_EXTENSIONS.values()):
+        line = re.compile(r'^[ \t]*' + re.escape(flag) + r'[ \t]*\\\n', re.M)
+        # Phar is enabled by default; removing its shared-build flag alone
+        # would build it into the main executable instead.
+        replacement = (lambda match: '  --disable-phar \\\n') if flag == OMITTED_EXTENSIONS['phar'] else ''
+        script, count = line.subn(replacement, script)
+        if count != 1:
+            raise ValueError('Review changed upstream configure flag ' + flag + ' before deriving')
+    # CGI is enabled by default upstream, independently of FPM.
+    script, count = re.subn(r'(^[ \t]*--enable-cli[ \t]*\\\n)',
+                            r'\g<1>  --disable-cgi \\\n', script, flags=re.M)
+    if count != 1:
+        raise ValueError('Review changed upstream CLI configuration')
+    return script
+
+def retained_subpackages(config):
+    subs = config['subpackages']
+    if sorted(s['name'] for s in subs) != sorted(KEPT_SUBPACKAGES + OMITTED_SUBPACKAGES):
+        raise ValueError('Review changed upstream subpackages before deriving')
+    kept = [s for s in subs if s['name'] not in OMITTED_SUBPACKAGES]
+    for section in [config['package']] + kept:
+        if any(name.split('=')[0] in OMITTED_SUBPACKAGES
+               for name in section.get('dependencies', {}).get('runtime', [])):
+            raise ValueError('Review ' + section['name'] + ': it depends on a package this build leaves out')
+    return kept
+
+def retained_extensions(config):
+    ranges = [item for item in config['data'] if item['name'] == 'extensions']
+    if len(ranges) != 1 or set(ranges[0]['items']) != KEPT_EXTENSIONS | set(OMITTED_EXTENSIONS):
+        raise ValueError('Review changed upstream extensions before deriving')
+    return {key: value for key, value in ranges[0]['items'].items() if key in KEPT_EXTENSIONS}
+
+def prune():
+    return {'name': PRUNE, 'runs': 'rm -R "${{targets.destdir}}/usr/share/man"\n'}
+
+def retained_tests(config):
+    test = deepcopy(config['test'])
+    contents = test['environment']['contents']['packages']
+    tidy = '${{package.name}}-tidy'
+    if contents.count(tidy) != 1 or sum(s.get('uses') == 'test/php-tidy' for s in test['pipeline']) != 1:
+        raise ValueError('Review changed upstream Tidy test before omitting the extension')
+    contents.remove(tidy)
+    test['pipeline'] = [s for s in test['pipeline'] if s.get('uses') != 'test/php-tidy']
+    return test
 
 def probe(pkg):
     php = (pkg.dir / 'tests/probe.php').read_text()
@@ -74,33 +139,31 @@ def derive(pkg, config, lock):
     if not patched or patched != list(range(1, patched[-1] + 1)):
         raise ValueError('Review changed upstream patch steps before deriving')
     pipeline.insert(patched[-1] + 1, patching.step(PATCHES))
-    # The build runs the new php on build-tree scripts (phar.phar), so the build
+    # The build runs the new php on build-tree scripts, so the build
     # guest grants every group; packages hold nothing under /etc/runtime-hardening.
     pipeline.insert(patched[-1] + 2, {'name': 'Allow every group in the build guest', 'runs': grant_all()})
     configure = [step for step in pipeline if step.get('name') == 'Configure']
     if len(configure) != 1:
         raise ValueError('Review changed upstream configure step before deriving')
-    for flag in REMOVED.values():
-        line = re.compile(r'^[ \t]*' + re.escape(flag) + r'[ \t]*\\\n', re.M)
-        configure[0]['runs'], count = line.subn('', configure[0]['runs'])
-        if count != 1:
-            raise ValueError('Review changed upstream configure flag ' + flag + ' before deriving')
+    configure[0]['runs'] = configure_without_omissions(configure[0]['runs'])
+    for name in APXS_STEPS:
+        if sum(s.get('name') == name for s in pipeline) != 1:
+            raise ValueError('Review changed upstream Apache install steps')
+    pipeline[:] = [s for s in pipeline if s.get('name') not in APXS_STEPS]
+    pipeline.append(prune())
     wolfi = str(config['package']['version']) + '-r' + str(config['package']['epoch'])
     config['package']['epoch'] = epoch(config['package']['epoch'], lock['revision'])
     config['package']['description'] += ' (Werewolf fixed hardening policy)'
-    if not set(REMOVED) <= {sub['name'] for sub in config['subpackages']}:
-        raise ValueError('Review changed upstream subpackages before deriving')
-    kept = [sub for sub in config['subpackages'] if sub['name'] not in REMOVED]
-    for sub in kept:
-        if any(name in REMOVED for name in sub.get('dependencies', {}).get('runtime', [])):
-            raise ValueError('Review ' + sub['name'] + ': it depends on a package this build leaves out')
+    kept = retained_subpackages(config)
     config['subpackages'] = kept
+    extensions = retained_extensions(config)
+    next(item for item in config['data'] if item['name'] == 'extensions')['items'] = extensions
     # Each package names the Wolfi build it rebuilds: werewolf matches Wolfi's
     # CVE fixes against that (lib/prebuilt.zig), not against our epoch.
     for section in [config['package']] + kept:
         section.setdefault('dependencies', {}).setdefault('provides', []).append(
             'wolfi-origin:' + original + ':' + wolfi)
-    test = config['test']
+    test = config['test'] = retained_tests(config)
     test.setdefault('environment', {}).setdefault('contents', {}).setdefault('packages', []).extend(PROBE_PACKAGES)
     test['pipeline'].append({'name': 'Werewolf protections hold, and allowances take each back',
                              'runs': probe(pkg)})
@@ -118,23 +181,29 @@ def test_recipe(config, repository):
             test['pipeline'].insert(0, dict(grant))
     return config
 
-FLAG = re.compile(r'--[a-zA-Z0-9_-]+(?:=[^\s\\]+)?')
-
 def check(pkg, upstream, derived):
-    """Raise AssertionError unless derived keeps everything Wolfi builds with."""
+    """Keep Wolfi's FPM/CLI build and used extensions, with documented omissions."""
     configure = lambda c: next(x['runs'] for x in c['pipeline'] if x.get('name') == 'Configure')
-    removed = set(REMOVED.values())
-    kept = set(FLAG.findall(configure(upstream))) - removed
-    assert kept <= set(FLAG.findall(configure(derived))), 'upstream configure flags removed'
-    assert not removed & set(FLAG.findall(configure(derived))), 'a removed facility is still configured'
+    assert configure(derived) == configure_without_omissions(configure(upstream)), 'upstream configure flags changed'
     assert derived['environment'] == upstream['environment'], 'upstream build environment changed'
     patches = lambda c: [x for x in c['pipeline'] if x.get('uses') == 'patch']
     assert patches(upstream) == patches(derived), "Wolfi's patches changed"
     ours = next(i for i, x in enumerate(derived['pipeline']) if x.get('name') == 'Apply Werewolf policy patches')
     assert derived['pipeline'][ours - 1] == patches(upstream)[-1], "our patches must follow Wolfi's"
-    # Configure loses only the removed flags, which the checks above hold.
-    steps = lambda c: [x for x in c['pipeline'][1:]
-                       if x.get('name') not in ('Apply Werewolf policy patches', 'Configure', 'Allow every group in the build guest')]
-    assert steps(upstream) == steps(derived), 'an upstream build step changed'
-    for test in upstream['test']['pipeline']:
-        assert test in derived['test']['pipeline'], "Wolfi's package test removed"
+    assert derived['pipeline'][-1] == prune(), 'manpages must be removed before splitting'
+    assert sum(s.get('name') == PRUNE for s in derived['pipeline']) == 1, 'one manpage cleanup step'
+    assert not any(s.get('name') in APXS_STEPS for s in derived['pipeline']), 'Apache install steps remain'
+    steps = lambda c, omitted: [x for x in c['pipeline'][1:] if x.get('name') not in omitted]
+    ours_only = ('Apply Werewolf policy patches', 'Configure', 'Allow every group in the build guest', PRUNE)
+    assert steps(upstream, ('Configure',) + APXS_STEPS) == steps(derived, ours_only), 'an upstream build step changed'
+    strip = lambda subs: [{**s, 'dependencies': {**s.get('dependencies', {}), 'provides': [
+        p for p in s.get('dependencies', {}).get('provides', []) if not p.startswith('wolfi-origin:')]}}
+        for s in subs]
+    assert strip(retained_subpackages(upstream)) == strip(derived['subpackages']), 'an upstream subpackage changed'
+    expected_data = [{**item, 'items': retained_extensions(upstream)} if item['name'] == 'extensions' else item
+                     for item in upstream['data']]
+    assert derived['data'] == expected_data, 'upstream extension selection changed'
+    expected_test = retained_tests(upstream)
+    expected_test['environment']['contents']['packages'].extend(PROBE_PACKAGES)
+    assert derived['test']['environment'] == expected_test['environment'], 'upstream test environment changed'
+    assert derived['test']['pipeline'][:-1] == expected_test['pipeline'], "a retained package test changed"

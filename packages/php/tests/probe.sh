@@ -47,7 +47,7 @@ report() { "$php" "$probe"; }
 rm -rf "$allowdir"
 grant writable-source
 
-closed='{"deserialize":false,"exec":false,"native":false,"phar":false}'
+closed='{"deserialize":false,"exec":false,"native":false,"phar":false,"phar_class":false,"phar_extension":false}'
 expect 'closed: no exec, native, deserialize or phar' "$closed" report
 
 # inline: -r gives code, refused unless php:inline.
@@ -62,13 +62,18 @@ refuse 'a script on a writable mount is refused' php:writable-source "$php" "$wo
 grant writable-source
 expect 'the same script runs once writable-source is allowed' 'script ran' "$php" "$work/child.php"
 
-# exec, native, deserialize and phar each return with their group alone.
-for group in exec native deserialize phar; do
+# exec, native and deserialize each return with their group alone.
+for group in exec native deserialize; do
 	grant "$group"
 	expect "$group is taken back alone" \
 		"$(printf '%s' "$closed" | sed 's/"'"$group"'":false/"'"$group"'":true/')" report
 	revoke "$group"
 done
+
+# Phar is not built; an allowance cannot restore its extension, class or wrapper.
+grant phar
+expect 'Phar stays absent even with an allowance' "$closed" report
+revoke phar
 
 # A link is not an allowance, even to a regular file: lock times will be links.
 : > "$work/target"

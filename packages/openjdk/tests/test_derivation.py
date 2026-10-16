@@ -2,6 +2,7 @@ import copy
 import json
 from pathlib import Path
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -11,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / 'scripts'))
 import packages
 import patching
+import publish
 import verify
 
 FIXTURE = yaml.safe_load((ROOT / 'packages/openjdk/tests/fixtures/openjdk-27.yaml').read_text())
@@ -45,7 +47,10 @@ class Derivation(unittest.TestCase):
         self.assertEqual('openjdk-27', derived['package']['name'])
         self.assertEqual(1002, derived['package']['epoch'])
         self.assertEqual('27.0.0-r1002', pkg.hooks.full_version(LOCK))
-        self.assertEqual([s['name'] for s in FIXTURE['subpackages']], [s['name'] for s in derived['subpackages']])
+        self.assertEqual(['${{package.name}}-jre', '${{package.name}}-default-jvm', '${{package.name}}-default-jdk'],
+                         [s['name'] for s in derived['subpackages']])
+        self.assertEqual({'openjdk-27', 'openjdk-27-jre', 'openjdk-27-default-jvm', 'openjdk-27-default-jdk'},
+                         publish.package_names(derived))
         for section in [derived['package']] + derived['subpackages']:
             self.assertIn('wolfi-origin:openjdk-27:27.0.0-r2', section['dependencies']['provides'])
 
@@ -69,6 +74,27 @@ class Derivation(unittest.TestCase):
     def test_verify_accepts_the_derivation_of_wolfis_recipe(self):
         pkg, upstream, derived = self.derived()
         verify.check(pkg, upstream, derived)
+
+    def test_omitted_packages_do_not_build_jmods_or_fetch_a_container_entrypoint(self):
+        _, _, derived = self.derived()
+        self.assertIn('make jdk-image legacy-jre-image\n', [s.get('runs') for s in derived['pipeline']])
+        self.assertNotIn('cacert-entrypoint-hash', derived['vars'])
+        self.assertFalse(any(s.get('uses') == 'fetch' for s in derived['pipeline']))
+
+    def test_demo_cleanup_preserves_jdk_and_jre_files(self):
+        pkg, _, derived = self.derived()
+        root = self.root / 'installed files'
+        home = 'usr/lib/jvm/java-27-openjdk/'
+        kept = [home + 'bin/java', home + 'bin/javac', home + 'lib/modules', home + 'include/jni.h']
+        for name in kept + [home + 'demo/jfc/SwingSet2/SwingSet2.jar']:
+            path = root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.touch()
+        self.assertEqual(pkg.hooks.PRUNE, derived['pipeline'][-1]['name'])
+        script = derived['pipeline'][-1]['runs'].replace('${{targets.destdir}}', str(root)).replace(
+            '${{vars.java-version}}', '27')
+        subprocess.run(['sh', '-eu', '-c', script], check=True)
+        self.assertEqual(set(kept), {str(p.relative_to(root)) for p in root.rglob('*') if p.is_file()})
 
     def test_a_future_configure_option_survives(self):
         def add(recipe):
@@ -103,7 +129,14 @@ class Derivation(unittest.TestCase):
         def name(recipe):
             recipe['package']['name'] = 'openjdk-28'
 
-        for change in [repository, option, second, order, environment, name]:
+        def subpackage(recipe):
+            recipe['subpackages'].append({'name': '${{package.name}}-new'})
+
+        def build(recipe):
+            next(s for s in recipe['pipeline'] if s.get('runs', '').strip() ==
+                 'make jdk-image legacy-jre-image jmods')['runs'] += 'make new-image\n'
+
+        for change in [repository, option, second, order, environment, name, subpackage, build]:
             with self.subTest(change.__name__), self.assertRaisesRegex(ValueError, 'Review'):
                 self.derived(change)
 
@@ -122,6 +155,12 @@ class Derivation(unittest.TestCase):
             lambda d: d['test']['pipeline'].pop(0),
             lambda d: d['subpackages'].pop(),
             lambda d: d.update(update={'enabled': True}),
+            lambda d: d['pipeline'].pop(),
+            lambda d: d['pipeline'][-1].update(runs='true\n'),
+            lambda d: d['subpackages'].append(copy.deepcopy(next(s for s in upstream['subpackages']
+                if s['name'] == '${{package.name}}-demos'))),
+            lambda d: next(s for s in d['pipeline'] if s.get('runs', '').strip() ==
+                'make jdk-image legacy-jre-image').update(runs='make jdk-image legacy-jre-image jmods\n'),
             configure,
         ]:
             relaxed = copy.deepcopy(derived)

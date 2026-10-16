@@ -8,11 +8,18 @@ Packages keep Wolfi's names, so forms that install `openjdk-27` or its `-jre` an
 
 ## Differences from Wolfi's build
 
-Same as Wolfi: source commit, Wolfi's patch, toolchain, configure options, build and
-install steps, every subpackage and package test.
+Same as Wolfi: source commit, Wolfi's patch, toolchain, configure options, JDK/JRE
+image builds and the retained packages' tests.
 
 - **Source**: the locked commit is fetched from `jdk27u`, then from mainline `jdk`,
   which holds each GA tag, in place of Wolfi's checkout.
+- **Packages**: keep `openjdk-27` (the full JDK), `openjdk-27-jre`,
+  `openjdk-27-default-jdk` and `openjdk-27-default-jvm`. App forms install the JRE;
+  application builds need the JDK, and the selectors support the usual tool paths.
+  Omit `-demos`, `-jmods` and `-oci-entrypoint-compat`: none has a current consumer.
+  Demo files are discarded from the JDK before packaging; the separate `jmods`
+  build target and container entrypoint download are removed. The JVM's normal JIT
+  remains part of both the JDK and JRE. New subpackages require an identified use case.
 - **Patches** (`patches/series`), applied after Wolfi's:
   1. HotSpot ignores `_JAVA_OPTIONS` and `JAVA_TOOL_OPTIONS`; the launcher ignores
      `JDK_JAVA_OPTIONS` and `JDK_ALTERNATE_VM`, which loads any directory's `libjvm.so`.
@@ -38,7 +45,7 @@ install steps, every subpackage and package test.
 - **Packaging**: epoch `1000 × policy.json revision + Wolfi epoch` sorts above every
   Wolfi rebuild; each package provides `wolfi-origin:openjdk-27:VERSION-rEPOCH` for CVE
   matching. Derivation stops for review when the checkout, the patch order, the test
-  environment or the package identity changes.
+  environment, image build step, subpackage names or the package identity changes.
 
 ## Behavior changes for applications
 
@@ -70,6 +77,8 @@ yet gated for Java: jshell goes with the jlink JRE and writable code with the ph
 
 - A jlink-built runtime without `jdk.attach`, `java.rmi`, `java.management.rmi` and
   `jdk.jdwp.agent`; today these modules ship, and only argv or an allowance opens them.
+  Revisit a separate `-jmods` package when a concrete runtime build needs it; Wolfi's
+  linkable-runtime build and existing jlink tests remain enabled.
 
 ## Building
 
