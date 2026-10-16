@@ -26,7 +26,10 @@ def root_probe(runtime, command):
     """Exercise real/effective UID mismatches before restoring the build marker."""
     import shlex
     argv = ' '.join(shlex.quote(arg) for arg in command)
-    return r'''root_work=$(mktemp -d)
+    # Melange's bubblewrap guest starts as a 0700 temporary directory mounted
+    # at /. Dropped-privilege probes must be able to traverse that guest root.
+    return r'''chmod 755 /
+root_work=$(mktemp -d)
 chmod 755 "$root_work"
 cat > "$root_work/identity.c" <<'WEREWOLF_IDENTITY_C'
 #define _GNU_SOURCE
