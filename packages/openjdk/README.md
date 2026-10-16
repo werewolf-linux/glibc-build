@@ -25,7 +25,7 @@ image builds and the retained packages' tests.
      `JDK_JAVA_OPTIONS` and `JDK_ALTERNATE_VM`, which loads any directory's `libjvm.so`.
   2. `DisableAttachMechanism` defaults to true: no `jcmd`, `jstack` or agent attach.
   3. `jdk.internal.misc.WerewolfAllowance` reads allowances: an allowance is a regular
-     file, never a link, in `/etc/werewolf/allow/java`.
+     file, never a link, in `/etc/runtime-hardening/allow/<ns>/java` or `.../all/java`.
   4. `ObjectInputStream` refuses every class but primitive arrays, as the filter `!*`
      would, unless `deserialize` is allowed. No filter, filter factory or
      `jdk.serialFilter` takes this back.

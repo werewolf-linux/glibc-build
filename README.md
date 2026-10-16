@@ -34,6 +34,22 @@ or other); it is not a form allowance. Publication rejects any runtime APK conta
 that marker or anything else under `/etc/runtime-hardening`. Production services must
 drop privileges before starting a runtime, including PHP-FPM's master process.
 
+Hardening denials emit one JSON record directly to file descriptor 2 (stderr),
+which Werewolf routes to the console. This also happens when an application
+catches the exception or replaces its language's stderr object. Records identify
+the runtime, capability group, operation and target, with a timestamp, PID,
+effective UID and the process arguments from `/proc/self/cmdline`. No syslog
+service is required. Normal error messages and exit statuses still apply.
+
+Details are limited to 192 bytes (192 characters in Java), and process arguments
+to 256 bytes in total; `truncated` reports a limit being reached. Control characters
+are escaped to keep each record on one line. Targets include module/script paths,
+pickle classes, PHP function names and Java restricted methods; serialized payloads
+and the environment are not dumped. PHP's disabled functions fail during lookup,
+before their arguments are evaluated, so those records identify the function and
+script location. Redirecting the underlying stderr descriptor also redirects these
+records.
+
 The vocabulary and allowance files are shared; coverage follows each runtime's
 actual execution paths. Current differences remain explicit:
 

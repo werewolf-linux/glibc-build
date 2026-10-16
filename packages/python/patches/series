@@ -4,3 +4,4 @@
 0004-deserialize-pickle.patch
 0005-run-gate.patch
 0006-refuse-effective-root.patch
+0007-log-denials-to-stderr.patch

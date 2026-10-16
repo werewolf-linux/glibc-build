@@ -13,6 +13,9 @@ import java.lang.reflect.Field;
 
 public class Probe {
     public static void main(String[] args) throws Exception {
+        if (args.length > 0 && args[0].equals("hide-stderr")) {
+            System.setErr(new java.io.PrintStream(java.io.OutputStream.nullOutputStream()));
+        }
         String attach = ManagementFactory.getPlatformMXBean(HotSpotDiagnosticMXBean.class)
                 .getVMOption("DisableAttachMechanism").getValue();
         System.out.println("{\"options\":\"" + System.getProperty("werewolf.probe", "none")

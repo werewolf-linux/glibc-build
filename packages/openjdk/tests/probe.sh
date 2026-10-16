@@ -33,6 +33,12 @@ closed=$(state none refused refused refused)
 
 rm -rf "$allow"
 expect 'closed without allowances' "$closed" java Probe
+grep -F '"group":"deserialize"' "$work/stderr" | grep -F 'java.lang.Integer'
+grep -F '"group":"native"' "$work/stderr" | grep -F 'sun.misc.Unsafe'
+grep -F '"group":"native"' "$work/stderr" | grep -F 'reinterpret'
+
+expect 'replacing System.err cannot hide caught denials' "$closed" java Probe hide-stderr
+grep -F '"event":"runtime-denial"' "$work/stderr" | grep -F '"group":"deserialize"'
 
 # The environment opens nothing: the JVM and the launcher read none of it.
 open='-Dwerewolf.probe=leaked -Djdk.serialFilter=* -Dsun.misc.unsafe.memory.access=allow -XX:-DisableAttachMechanism'

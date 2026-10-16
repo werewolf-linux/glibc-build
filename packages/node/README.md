@@ -25,7 +25,7 @@ The default restrictions are:
 - `node:inline` is required for `-e`, `-p`, stdin, REPL input, worker `eval` and
   ordinary `data:` module imports.
 - `node:writable-source` is required for main scripts and ordinary CommonJS/ESM
-  code modules on writable mounts, and for disk compilation caches. Unknown mount
+  code modules on writable mounts, virtual module filesystems, and disk compilation caches. Unknown mount
   provenance also refuses. JSON data modules, data read through `fs` and ordinary
   SQLite operations remain available.
 - `NODE_OPTIONS` support is compiled out. Internal environment options are ignored;

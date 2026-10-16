@@ -55,6 +55,7 @@ root_refused() {
         echo 'probe: FAIL: effective root ran' >&2; exit 1
     fi
     grep -F 'effective UID 0' "$root_work/err"
+    grep -F '"event":"runtime-denial"' "$root_work/err" | grep -F '"group":"root"'
 }
 ''' + 'root_refused ' + argv + '\n' + r'''
 # A real root UID does not prevent execution after effective privileges drop.

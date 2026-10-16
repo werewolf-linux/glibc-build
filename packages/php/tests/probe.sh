@@ -49,6 +49,22 @@ grant writable-source
 
 closed='{"deserialize":false,"exec":false,"native":false,"phar":false,"phar_class":false,"phar_extension":false}'
 expect 'closed: no exec, native, deserialize or phar' "$closed" report
+grep -F '"group":"deserialize"' "$work/err" | grep -F '"detail":"stdClass"'
+
+cat > "$work/caught.php" <<'PHP'
+<?php
+ini_set('display_errors', '0');
+ini_set('log_errors', '0');
+foreach (['system', 'dl'] as $function) {
+    try { $function('denied-argument'); } catch (Throwable $e) { }
+}
+try { system('denied-argument'); } catch (Throwable $e) { }
+echo "blocked";
+PHP
+expect 'caught function denials bypass PHP error settings' blocked "$php" "$work/caught.php"
+grep -F '"group":"exec"' "$work/err" | grep -F '"operation":"system"'
+grep -F '"group":"native"' "$work/err" | grep -F '"operation":"dl"'
+test "$(grep -c '"operation":"system"' "$work/err")" = 2
 
 # inline: -r gives code, refused unless php:inline.
 refuse '-r is refused' php:inline "$php" -r 'echo 1;'

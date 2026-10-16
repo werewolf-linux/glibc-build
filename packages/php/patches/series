@@ -8,3 +8,4 @@
 0008-inline.patch
 0009-writable-source.patch
 0010-refuse-effective-root.patch
+0011-log-denials-to-stderr.patch

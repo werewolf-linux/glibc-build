@@ -17,7 +17,8 @@ FPM and extension build options and tests.
 
 - **Patches** (`patches/series`), applied after Wolfi's:
   1. `PHPRC` and `PHP_INI_SCAN_DIR` are ignored; configuration comes from the root.
-  2. Allowances: `/etc/werewolf/allow/php/NAME`, a regular file, never a link.
+  2. Allowances: `/etc/runtime-hardening/allow/<ns>/php/GROUP` or
+     `.../all/php/GROUP`, a regular file, never a link.
   3. `exec`, `system`, `passthru`, `shell_exec`, `proc_open`, `popen`, `pcntl_exec` and
      `dl` stay disabled, whatever `php.ini` or `-d` says, unless each is allowed.
   4. `unserialize` makes objects only of classes `allowed_classes` names, unless
@@ -53,11 +54,10 @@ FPM and extension build options and tests.
 
 ## Behavior changes for applications
 
-- Composer, WordPress plugins and the like that shell out fail with "has been disabled
-  for security reasons"; a form that needs one declares `allow: [php:proc_open]` (or
-  the function's name) in `form.yaml`.
+- Composer, WordPress plugins and the like that shell out fail with "Call to undefined
+  function"; a form that needs one declares `allow: [php:exec]` in `form.yaml`.
 - `unserialize($data)` without `allowed_classes` yields `__PHP_Incomplete_Class` for
-  objects; name the classes, or declare `allow: [php:unserialize]`.
+  objects; name the classes, or declare `allow: [php:deserialize]`.
 - Phar is unavailable, including `phar://` and tools such as `composer.phar`.
   Our current app recipes use releases with dependencies already included.
 - `PHPRC` and `PHP_INI_SCAN_DIR` do nothing; put settings in the image's `php.ini`.

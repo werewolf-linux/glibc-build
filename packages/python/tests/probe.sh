@@ -59,6 +59,21 @@ grant writable-source
 
 closed='{"deserialize": false, "ignore_environment": 1, "native": false, "no_user_site": 1, "pythonpath": false, "sibling": true, "sqlite_extensions": false, "user_site": false, "userbase": false}'
 expect 'closed: PYTHON* ignored, user site off, no native or deserialize' "$closed" report
+grep -F '"group":"native"' "$work/err" | grep -F '"detail":"_ctypes"'
+grep -F '"group":"deserialize"' "$work/err" | grep -F 'builtins.len'
+
+# The fallback unpickler logs too, even with sys.stderr replaced and the
+# exception caught. It must use the same native stderr writer.
+cat > "$work/pure-pickle.py" <<'PY'
+import io, pickle, sys
+sys.stderr = io.StringIO()
+try:
+    pickle._Unpickler(io.BytesIO(pickle.dumps(len))).load()
+except pickle.UnpicklingError:
+    print('blocked')
+PY
+expect 'caught pure-Python pickle denial reaches stderr' blocked "$python" "$work/pure-pickle.py"
+grep -F '"group":"deserialize"' "$work/err" | grep -F 'builtins.len'
 
 # inline: -c and piped stdin give code, refused unless python:inline.
 refuse '-c is refused' python:inline "$python" -c 'print(1)'

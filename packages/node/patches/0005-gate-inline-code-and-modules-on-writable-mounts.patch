@@ -51,21 +51,22 @@ diff --git a/src/node_credentials.cc b/src/node_credentials.cc
 diff --git a/src/node.cc b/src/node.cc
 --- a/src/node.cc
 +++ b/src/node.cc
-@@ -378,6 +378,13 @@
+@@ -378,6 +378,14 @@
      return StartExecution(env, "internal/main/prof_process");
    }
  
 +  if (!hardening::Allowed("inline") &&
 +      (env->options()->has_eval_string || env->options()->force_repl ||
 +       first_argv.empty() || first_argv == "-")) {
-+    env->ThrowError("node:inline required for eval, REPL or stdin");
++    fprintf(stderr, "node:inline required for eval, REPL or stdin\n");
++    env->set_exit_code(ExitCode::kGenericUserError);
 +    return MaybeLocal<Value>();
 +  }
 +
    // -e/--eval without -i/--interactive
    if (env->options()->has_eval_string && !env->options()->force_repl) {
      return StartExecution(env, "internal/main/eval_string");
-@@ -1046,8 +1053,10 @@
+@@ -1046,8 +1054,10 @@
      if (exit_code != ExitCode::kNoFailure) return exit_code;
    }
  
@@ -78,6 +79,19 @@ diff --git a/src/node.cc b/src/node.cc
    CheckGlobalBenchOptions(errors);
    CheckGlobalProcessTimeoutOptions(*argv, errors);
    if (!errors->empty()) return ExitCode::kInvalidCommandLineArgument;
+diff --git a/src/node_options.cc b/src/node_options.cc
+--- a/src/node_options.cc
++++ b/src/node_options.cc
+@@ -301,6 +301,9 @@
+ 
+ void EnvironmentOptions::CheckOptions(std::vector<std::string>* errors,
+                                       std::vector<std::string>* argv) {
++  if ((experimental_vfs || vfs_load) && !hardening::Allowed("writable-source")) {
++    errors->emplace_back("node:writable-source required for virtual module filesystems");
++  }
+   if (!input_type.empty()) {
+     if (input_type != "commonjs" && input_type != "module" &&
+         input_type != "commonjs-typescript" &&
 diff --git a/lib/internal/modules/cjs/loader.js b/lib/internal/modules/cjs/loader.js
 --- a/lib/internal/modules/cjs/loader.js
 +++ b/lib/internal/modules/cjs/loader.js
@@ -131,11 +145,19 @@ diff --git a/lib/internal/worker.js b/lib/internal/worker.js
  
  const {
    ArrayIsArray,
-@@ -204,6 +205,7 @@
-     throwIfBuildingSnapshot('Creating workers');
-     super();
-     const isInternal = arguments[2] === kIsInternal;
-+    if (!isInternal && options.eval) werewolfInline();
-     debug(
-       `[${threadId}] create new worker`,
-       filename,
+@@ -224,6 +225,7 @@
+       doEval = 'internal';
+       url = `node:${filename}`;
+     } else if (options.eval) {
++      werewolfInline();
+       if (typeof filename !== 'string') {
+         throw new ERR_INVALID_ARG_VALUE(
+           'options.eval',
+@@ -235,6 +237,7 @@
+       doEval = 'classic';
+     } else if (isURL(filename) && filename.protocol === 'data:') {
+       url = null;
++      werewolfInline();
+       doEval = 'data-url';
+       filename = `${filename}`;
+     } else {

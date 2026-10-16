@@ -52,8 +52,14 @@ grant writable-source
 closed='{"exec":false,"native":false,"sqlite":false,"inspector":false}'
 report() { "$node" "$work/probe.cjs" report "$work/addon.node"; }
 expect 'default capability floor' "$closed" report
+grep -F '"group":"exec"' "$work/err" | grep -F '"event":"runtime-denial"'
+grep -F '"group":"native"' "$work/err" | grep -F 'addon.node'
+grep -F '"group":"native"' "$work/err" | grep -F 'sqlite extension'
 expect 'every child-process API, including raw binding, refuses' blocked \
     "$node" "$work/probe.cjs" exec-paths "$work/child.cjs"
+expect 'replacing process.stderr.write cannot hide a caught denial' blocked \
+    "$node" "$work/probe.cjs" hide-stderr
+grep -F '"group":"exec"' "$work/err" | grep -F '/denied-node-tool'
 expect 'audit flags cannot lift the floor' "$closed" "$node" --permission-audit \
     --allow-child-process --allow-addons --allow-wasi \
     "$work/probe.cjs" report "$work/addon.node"
@@ -71,6 +77,9 @@ fi
 expect 'NODE_OPTIONS is ignored' "$closed" env \
     NODE_OPTIONS=--require=/missing-werewolf-hook \
     "$node" "$work/probe.cjs" report "$work/addon.node"
+echo 'NODE_OPTIONS=--require=/missing-werewolf-hook' > "$work/injected.env"
+expect 'dotenv cannot inject NODE_OPTIONS' "$closed" "$node" \
+    --env-file="$work/injected.env" "$work/probe.cjs" report "$work/addon.node"
 expect 'workers cannot inject NODE_OPTIONS' ran \
     "$node" "$work/probe.cjs" worker-options "$work/worker.cjs"
 expect 'OpenSSL environment cannot load native code' cleared env \
@@ -88,6 +97,9 @@ expect 'data URL allowance' ran "$node" "$work/probe.cjs" data-import
 expect 'worker eval allowance' ran "$node" "$work/probe.cjs" worker-eval
 revoke writable-source
 refuse 'writable main' node:writable-source "$node" "$work/child.cjs"
+grep -F '"group":"writable-source"' "$work/err" | grep -F 'child.cjs'
+refuse 'virtual filesystems cannot mask writable code' node:writable-source \
+    "$node" --experimental-vfs "$work/child.cjs"
 expect 'JSON data stays readable without writable-source' 42 \
     "$node" -e 'console.log(require(process.argv[1]).value)' "$work/data.json"
 expect 'ESM JSON data stays readable without writable-source' 42 \

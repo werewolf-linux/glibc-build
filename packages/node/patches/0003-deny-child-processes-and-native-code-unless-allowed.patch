@@ -73,6 +73,22 @@ diff --git a/src/permission/permission.h b/src/permission/permission.h
      if (!enabled_) [[likely]] {
        return true;
      }
+diff --git a/src/permission/permission.cc b/src/permission/permission.cc
+--- a/src/permission/permission.cc
++++ b/src/permission/permission.cc
+@@ -259,7 +259,11 @@
+ MaybeLocal<Value> CreateAccessDeniedError(Environment* env,
+                                           PermissionScope perm,
+                                           std::string_view res) {
+-  const char* suggestion = GetErrorFlagSuggestion(perm);
++  const char* suggestion = !HardeningGranted(perm)
++      ? (perm == PermissionScope::kChildProcess
++             ? "The image must grant node:exec; command-line flags grant nothing."
++             : "The image must grant node:native; command-line flags grant nothing.")
++      : GetErrorFlagSuggestion(perm);
+   Local<Object> err = ERR_ACCESS_DENIED(
+       env->isolate(), "Access to this API has been restricted. %s", suggestion);
+ 
 diff --git a/src/node_sqlite.cc b/src/node_sqlite.cc
 --- a/src/node_sqlite.cc
 +++ b/src/node_sqlite.cc

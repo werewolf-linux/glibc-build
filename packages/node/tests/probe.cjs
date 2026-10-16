@@ -17,7 +17,7 @@ async function main() {
   switch (process.argv[2]) {
     case 'report': {
       const exec = !denied(() => {
-        const result = cp.spawnSync('/bin/true');
+        const result = cp.spawnSync(process.execPath, ['--version']);
         if (result.error) throw result.error;
         assert.equal(result.status, 0);
       });
@@ -43,6 +43,11 @@ async function main() {
       console.log('blocked');
       break;
     }
+    case 'hide-stderr':
+      process.stderr.write = () => true;
+      assert(denied(() => cp.spawnSync('/denied-node-tool')));
+      console.log('blocked');
+      break;
     case 'data-import':
       await import('data:text/javascript,export default 42');
       console.log('ran');
