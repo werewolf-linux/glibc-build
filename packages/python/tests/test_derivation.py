@@ -61,7 +61,7 @@ class Derivation(unittest.TestCase):
         ours = names.index('Apply Werewolf policy patches')
         self.assertEqual('patch', derived['pipeline'][ours - 1]['uses'])
         self.assertLess(ours, names.index('Clone patched source for no-GIL and JIT builds'))
-        self.assertLess(names.index('Allow ctypes and the environment in the build guest only'),
+        self.assertLess(names.index('Allow every runtime-hardening group in the build guest only'),
                         names.index('autoconf/configure'))
 
     def test_loadable_sqlite_extensions_alone_leave_the_configure_options(self):
@@ -75,6 +75,14 @@ class Derivation(unittest.TestCase):
         _, _, derived = self.derived()
         self.assertIn('sh /tmp/probe/probe.sh /tmp/probe/probe.py', derived['test']['pipeline'][-1]['runs'])
         self.assertEqual({'enabled': False}, derived['update'])
+
+    def test_the_build_guest_grants_every_group_in_the_portable_tree(self):
+        _, _, derived = self.derived()
+        allow = next(s['runs'] for s in derived['pipeline']
+                     if s.get('name') == 'Allow every runtime-hardening group in the build guest only')
+        self.assertIn('/etc/runtime-hardening/allow/all/python', allow)
+        for group in ['native', 'deserialize', 'inline', 'writable-source', 'environment']:
+            self.assertIn(group, allow)
 
     def test_verify_accepts_the_derivation_of_wolfis_recipe(self):
         pkg, upstream, derived = self.derived()

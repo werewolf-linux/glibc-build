@@ -1,50 +1,54 @@
 # python
 
 Werewolf's CPython: Wolfi's newest stable `python-3.15` recipe, captured unchanged,
-plus three policy patches
+plus policy patches
 ([design](https://github.com/werewolf-linux/werewolf/blob/main/docs/design/hardened-interpreters.md)).
 Packages keep Wolfi's names, so forms that install `python-3.15` or `python3` get it.
 
 ## Differences from Wolfi's build
 
-Same as Wolfi: source commit, Wolfi's four patches, toolchain, configure options but
-one, the PGO run, the free-threaded and JIT builds, every subpackage and package test.
+Same as Wolfi: source commit, Wolfi's patches, toolchain, configure options but one, the
+PGO run, the free-threaded and JIT builds, every subpackage and package test.
 
 - **Patches** (`patches/series`), applied after Wolfi's and before the free-threaded and
   JIT builds copy the tree:
-  1. `-E -s` by default: `PYTHON*` variables are ignored unless
-     `/etc/werewolf/allow/python/environment` exists; the user site always is.
+  1. `-E -s` by default: `PYTHON*` variables are ignored unless the image allows the
+     environment; the user site always is.
   2. No working directory on `sys.path` for `-m`, `-c` or stdin; a script keeps its own
      directory.
-  3. `_ctypes` refuses to load unless `/etc/werewolf/allow/python/ctypes` is a regular
-     file, never a link.
+  3. `native`: `_ctypes` loads only when allowed, since native code removes any check.
+  4. `deserialize`: `pickle` reconstructs an object only when allowed; plain data still
+     unpickles. The pure-Python unpickler is gated too.
+  5. `inline` and `writable-source` (in `main.c`): refuse `-c` and piped stdin, and a
+     main script whose file is on a writable mount (so `/data` and `/tmp` are refused).
 - **Configure**: no `--enable-loadable-sqlite-extensions`; `sqlite3` loads no native
   code.
-- **Build**: a step writes the ctypes and environment allowances in the build guest
-  only: CPython's extension check drops a module that refuses to import, and its PGO
-  run's tests set `PYTHON*` variables for the interpreters they start. Packages hold
-  nothing under `/etc/werewolf`, and werewolf's forms cannot allow the environment.
-- **Tests**: Wolfi's tests, then `tests/probe.sh`, which checks each protection and
-  that each allowance, and only a regular file, takes back what it names.
+- **Allowances**: a capability group is an empty file, never a symlink, at
+  `/etc/runtime-hardening/allow/<ns>/python/GROUP` or `.../all/python/GROUP`, read with
+  `lstat`. `<ns>` is the service from `/proc/self/cgroup`. The build guest grants every
+  group so CPython builds and its suite passes; packages ship nothing there.
+- **Tests**: Wolfi's tests, then `tests/probe.sh`, which holds each protection and sees
+  each group, and only a regular file, take its own back.
 - **Packaging**: epoch `1000 × policy.json revision + Wolfi epoch` sorts above every
-  Wolfi rebuild; each package provides `wolfi-origin:python-3.15:VERSION-rEPOCH` for
-  CVE matching. Derivation stops for review when the checkout, the patch and clone
-  order, the removed option or the package identity changes.
+  Wolfi rebuild; each package provides `wolfi-origin:python-3.15:VERSION-rEPOCH` for CVE
+  matching. Derivation stops for review when the checkout, the patch or clone order, the
+  removed option or the package identity changes.
 
 ## Behavior changes for applications
 
-- `PYTHONPATH`, `PYTHONHOME`, `PYTHONSTARTUP`, `PYTHONUNBUFFERED`,
-  `PYTHONDONTWRITEBYTECODE`, `PYTHONMALLOC`, `PYTHONUTF8` and the rest have no effect.
-  Use the matching option (`-u`, `-B`, `-X utf8`) or put code where `sys.path` looks.
+- `PYTHONPATH`, `PYTHONHOME`, `PYTHONSTARTUP`, `PYTHONUNBUFFERED` and the rest have no
+  effect. Use the matching option (`-u`, `-B`, `-X utf8`) or put code where `sys.path`
+  looks.
 - `pip install --user` and `~/.local` site-packages are not used; use a virtual
   environment, whose `pyvenv.cfg` still works.
-- `python -m app` from a data directory no longer imports modules from it; install the
-  application, or run it as a script.
-- `import ctypes` raises `ImportError` naming the allowance; a form that needs it
-  declares `allow: [python:ctypes]` in `form.yaml`.
+- `python -c`, a piped-in script, and a script under `/data` or `/tmp` are refused; a
+  form grants `python:inline` or `python:writable-source` to permit one.
+- `import ctypes` raises `ImportError` unless `allow: [python:native]`.
+- `pickle.load` of an object raises `UnpicklingError` unless `python:deserialize`.
+  This does not reach third-party loaders such as PyYAML's `UnsafeLoader`.
 - `sqlite3.Connection` has no `enable_load_extension`.
-- Programs that embed CPython through the legacy `Py_Initialize` keep CPython's
-  defaults for the environment and the user site; patches 2 and 3 still apply.
+- Programs that embed CPython through the legacy `Py_Initialize` keep CPython's defaults
+  for the environment and the user site; the other patches still apply.
 
 ## Building
 

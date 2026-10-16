@@ -1,4 +1,4 @@
-"""Python: Wolfi's newest stable CPython, with three policy patches (README.md).
+"""Python: Wolfi's newest stable CPython, with Werewolf's policy patches (README.md).
 
 The hooks scripts/packages.py names. Packages keep Wolfi's names; their epoch
 sorts above every Wolfi rebuild of the same CPython snapshot."""
@@ -16,7 +16,7 @@ PATCHES = 'werewolf/patches'  # in the build context
 # The configure option this build leaves out: sqlite3 loading native code.
 REMOVED_OPTION = '--enable-loadable-sqlite-extensions'
 CLONE = 'Clone patched source for no-GIL and JIT builds'
-ALLOW = 'Allow ctypes and the environment in the build guest only'
+ALLOW = 'Allow every runtime-hardening group in the build guest only'
 PROBE_PY, PROBE_SH = 'WEREWOLF_PROBE_PY', 'WEREWOLF_PROBE_SH'
 
 def checkout(config):
@@ -73,16 +73,18 @@ def derive(pkg, config, lock):
     configures = [i for i, step in enumerate(pipeline) if step.get('uses') == 'autoconf/configure']
     if not patched or len(clones) != 1 or not configures or not patched[-1] < clones[0] < configures[0]:
         raise ValueError('Review changed upstream patch and clone steps before deriving')
-    # The build imports every extension it built, and drops one that refuses
-    # to load (Tools/build/check_extension_modules.py); its PGO run's tests set
-    # PYTHON* variables for the interpreters they start. So the build guest,
-    # and only it, allows ctypes and the environment. Packages hold nothing
-    # under /etc/werewolf, and werewolf's forms cannot allow the environment.
+    # The build runs the new python on build-tree scripts (writable-source),
+    # with -c (inline), importing every extension it built (native), and its
+    # PGO suite unpickles (deserialize) and sets PYTHON* variables
+    # (environment). So the build guest, and only it, grants every group.
+    # Packages hold nothing under /etc/runtime-hardening; werewolf's forms
+    # grant only the groups lib/allow.zig defines, never `environment`.
     pipeline[patched[-1] + 1:patched[-1] + 1] = [
         patching.step(PATCHES),
-        {'name': ALLOW, 'runs': 'mkdir -p /etc/werewolf/allow/python\n'
-                                ': > /etc/werewolf/allow/python/ctypes\n'
-                                ': > /etc/werewolf/allow/python/environment\n'}]
+        {'name': ALLOW, 'runs': 'mkdir -p /etc/runtime-hardening/allow/all/python\n'
+                                'for f in native deserialize inline writable-source environment; do\n'
+                                '  : > /etc/runtime-hardening/allow/all/python/$f\n'
+                                'done\n'}]
     options = config['vars']['python-config']
     line = re.compile(r'^[ \t]*' + re.escape(REMOVED_OPTION) + r'[ \t]*\\\n', re.M)
     config['vars']['python-config'], count = line.subn('', options)

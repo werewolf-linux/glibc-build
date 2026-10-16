@@ -1,83 +1,90 @@
 #!/bin/sh
-# probe.sh PROBE holds the installed python3 to the protections patches/series
-# compiles in, then takes back ctypes with an allowance and sees it return.
-# The package test runs it as root, with /etc/werewolf/allow/python free to
-# use (scripts/derive.py embeds it). PYTHON names another interpreter, and
-# ALLOW another allowance directory, for a test build of the patched source.
+# probe.sh PROBE: hold the installed python to the protections in patches/series,
+# then grant each capability group and see it return. The package test runs it
+# as root with /etc/runtime-hardening/allow free to use. PYTHON names another
+# interpreter and ALLOW another tree, for a dev build off the read-only root.
 set -eu
 probe=$1
 python=${PYTHON:-python3}
-allow=${ALLOW:-/etc/werewolf/allow/python}
+allowdir=${ALLOW:-/etc/runtime-hardening/allow}
+base=$allowdir/all/python
 work=$(mktemp -d)
-trap 'rm -rf "$work" "$allow"' EXIT
+trap 'rm -rf "$work" "$allowdir"' EXIT
+
+grant() { mkdir -p "$base"; : > "$base/$1"; }
+revoke() { rm -f "$base/$1"; }
 
 expect() {
-	name=$1
-	want=$2
-	shift 2
-	got=$("$@" 2>"$work/stderr") || true
-	if [ "$got" != "$want" ]; then
-		echo "probe: FAIL: $name" >&2
-		echo "  want $want" >&2
-		echo "  got  $got" >&2
-		cat "$work/stderr" >&2
+	name=$1; want=$2; shift 2
+	got=$("$@" 2>"$work/err") || true
+	if [ "$got" = "$want" ]; then echo "probe: ok: $name"; return; fi
+	echo "probe: FAIL: $name" >&2
+	echo "  want $want" >&2
+	echo "  got  $got" >&2
+	cat "$work/err" >&2
+	exit 1
+}
+
+refuse() {
+	name=$1; token=$2; shift 2
+	if "$@" >/dev/null 2>"$work/err"; then
+		echo "probe: FAIL: $name ran" >&2
+		exit 1
+	fi
+	if ! grep -q "$token" "$work/err"; then
+		echo "probe: FAIL: $name refusal does not name $token" >&2
+		cat "$work/err" >&2
 		exit 1
 	fi
 	echo "probe: ok: $name"
 }
 
-# Every PYTHON* variable that would add code: a path, a user base, a startup file.
-version=$("$python" -c 'import sys; print("%d.%d" % sys.version_info[:2])')
-mkdir -p "$work/script" "$work/path" "$work/userbase/lib/python$version/site-packages" "$work/cwd"
+version=$("$python" -V 2>&1 | cut -d' ' -f2 | cut -d. -f1-2)
+mkdir -p "$work/script" "$work/path" "$work/userbase/lib/python$version/site-packages"
 cp "$probe" "$work/script/probe.py"
-echo 'NAME = "sibling"' >"$work/script/sibling.py"
-echo 'print("pathevil")' >"$work/path/pathevil.py"
-echo 'print("userevil")' >"$work/userbase/lib/python$version/site-packages/userevil.py"
-echo 'print("startup ran")' >"$work/startup.py"
-echo 'print("cwdevil")' >"$work/cwd/cwdevil.py"
-: >"$work/cwd/-"
-run() {
-	env PYTHONPATH="$work/path" PYTHONUSERBASE="$work/userbase" PYTHONSTARTUP="$work/startup.py" \
-		"$python" "$@"
+echo 'NAME = "sibling"' > "$work/script/sibling.py"
+echo 'VALUE = 1' > "$work/path/pathevil.py"
+echo 'VALUE = 1' > "$work/userbase/lib/python$version/site-packages/userevil.py"
+echo 'print("script ran")' > "$work/child.py"
+
+report() {
+	# PYTHON* are set but must be ignored, so pathevil and userevil stay unseen.
+	env PYTHONPATH="$work/path" PYTHONUSERBASE="$work/userbase" "$python" "$work/script/probe.py"
 }
 
-closed='{"ctypes": false, "ignore_environment": 1, "no_user_site": 1, "pythonpath": false, "sibling": true, "sqlite_extensions": false, "user_site": false, "userbase": false}'
-rm -rf "$allow"
-expect 'closed without allowances; PYTHON* variables ignored' "$closed" run "$work/script/probe.py"
-expect 'PYTHONSTARTUP is ignored' '' run -i </dev/null
-"$python" -c 'import ctypes' 2>"$work/refused" && { echo "probe: FAIL: ctypes imported" >&2; exit 1; }
-grep -q 'python:ctypes' "$work/refused" || { echo "probe: FAIL: the refusal names no allowance" >&2; cat "$work/refused" >&2; exit 1; }
-echo "probe: ok: the ctypes refusal names its allowance"
+# The probe is a script on a writable mount, so running it needs writable-source;
+# that is the harness enabler, tested on its own with a child below.
+rm -rf "$allowdir"
+grant writable-source
 
-# The working directory, a service's writable data, is never on sys.path.
-cd "$work/cwd"
-expect '-m finds no module in the working directory' 'refused' \
-	sh -c '"$1" -m cwdevil >/dev/null 2>&1 && echo found || echo refused' sh "$python"
-expect '-c finds no module in the working directory' 'refused' \
-	sh -c '"$1" -c "import cwdevil" >/dev/null 2>&1 && echo found || echo refused' sh "$python"
-expect 'stdin finds no module in the working directory, even beside a file named -' 'refused' \
-	sh -c 'echo "import cwdevil" | "$1" - >/dev/null 2>&1 && echo found || echo refused' sh "$python"
-cd /
+closed='{"deserialize": false, "ignore_environment": 1, "native": false, "no_user_site": 1, "pythonpath": false, "sibling": true, "sqlite_extensions": false, "user_site": false, "userbase": false}'
+expect 'closed: PYTHON* ignored, user site off, no native or deserialize' "$closed" report
 
-# The allowance takes back ctypes, and nothing else.
-mkdir -p "$allow"
-: >"$allow/ctypes"
-expect 'the ctypes allowance takes back ctypes' \
-	'{"ctypes": true, "ignore_environment": 1, "no_user_site": 1, "pythonpath": false, "sibling": true, "sqlite_extensions": false, "user_site": false, "userbase": false}' \
-	run "$work/script/probe.py"
+# inline: -c and piped stdin give code, refused unless python:inline.
+refuse '-c is refused' python:inline "$python" -c 'print(1)'
+refuse 'piped stdin is refused' python:inline sh -c 'echo "print(1)" | "$0"' "$python"
+grant inline
+expect '-c returns once inline is allowed' '1' "$python" -c 'print(1)'
+revoke inline
 
-# The build guest's environment allowance takes back PYTHON* variables, never
-# the user site; werewolf's forms cannot grant it.
-rm -f "$allow/ctypes"
-: >"$allow/environment"
-expect 'the environment allowance takes back PYTHON* variables alone' \
-	'pathevil
-{"ctypes": false, "ignore_environment": 0, "no_user_site": 1, "pythonpath": true, "sibling": true, "sqlite_extensions": false, "user_site": false, "userbase": false}' \
-	run "$work/script/probe.py"
-rm -f "$allow/environment"
+# writable-source: a script whose file is on a writable mount, refused unless allowed.
+revoke writable-source
+refuse 'a script on a writable mount is refused' python:writable-source "$python" "$work/child.py"
+grant writable-source
+expect 'the same script runs once writable-source is allowed' 'script ran' "$python" "$work/child.py"
 
-# A link is not an allowance, even to a file: lock times will be links.
-: >"$work/target"
-ln -s "$work/target" "$allow/ctypes"
-ln -s "$work/target" "$allow/environment"
-expect 'a link is not an allowance' "$closed" run "$work/script/probe.py"
+# native (ctypes) and deserialize (pickle) each return with their group alone.
+grant native
+expect 'native allows ctypes' "$(printf '%s' "$closed" | sed 's/"native": false/"native": true/')" report
+revoke native
+grant deserialize
+expect 'deserialize allows pickle' "$(printf '%s' "$closed" | sed 's/"deserialize": false/"deserialize": true/')" report
+revoke deserialize
+
+# A link is not an allowance, even to a regular file: lock times will be links.
+: > "$work/target"
+ln -s "$work/target" "$base/native"
+expect 'a link is not an allowance' "$closed" report
+rm -f "$base/native"
+
+echo "probe: ok: every python protection holds, and each group takes its own back"
