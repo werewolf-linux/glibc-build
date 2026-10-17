@@ -118,9 +118,9 @@ uses a local Wolfi checkout. Local builds sign with a throwaway key in `build/ke
 `build/NAME/packages/ARCH/`.
 
 Native Linux CI builds can use dedicated self-hosted runners. Register one Linux
-runner per build machine for this repository, with passwordless sudo and apt, then
-set these repository variables to JSON arrays of its labels. Building glibc also
-requires a Linux kernel of at least 6.18.
+runner per build machine as a dedicated non-root account, then set these repository
+variables to JSON arrays of its labels. Building glibc also requires a Linux kernel
+of at least 6.18.
 
 ```text
 WEREWOLF_X86_64_BUILD_RUNNER=["self-hosted","Linux","X64"]
@@ -131,7 +131,25 @@ An unset variable uses the GitHub-hosted runner for that architecture. Linux bui
 use bubblewrap and the host's available CPUs and memory; the Node recipe builds
 with `make -j$(nproc)`. `MELANGE_CPU` and `MELANGE_MEMORY` size QEMU guests, not
 native bubblewrap builds. Runner setup adjusts Ubuntu's restrictive bubblewrap
-AppArmor child profile when present, and checks chroot before every build.
+AppArmor child profile on GitHub-hosted runners, and checks chroot before every build.
+
+Self-hosted jobs use preinstalled tools and never invoke sudo. Provision them once
+as an administrator (keep Arch's system packages up to date before installing):
+
+```sh
+# Fedora
+sudo dnf install bubblewrap python3-pip git make openssl patch util-linux shadow-utils
+# CachyOS / Arch
+sudo pacman -S --needed bubblewrap python python-pip git make openssl patch util-linux shadow
+```
+
+The runner account needs subordinate UID and GID ranges covering at least 65536
+IDs in `/etc/subuid` and `/etc/subgid`, with `newuidmap` and `newgidmap` available.
+`scripts/ci-root` uses `unshare --user --map-auto --map-root-user` so the account
+appears as UID 0 inside the namespace. Melange and the real/effective UID probes
+keep their required capabilities there without host root. The helper refuses a
+self-hosted agent running as host root. This is a user namespace, not a disposable
+machine: builds still have the runner account's access to files and the network.
 
 ## Adding a package
 
