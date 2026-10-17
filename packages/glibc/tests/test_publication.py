@@ -105,8 +105,14 @@ class ReleaseGate(unittest.TestCase):
             def run(*args):
                 nonlocal current, fail
                 calls.append(args)
+                if args == ('gh', 'api', 'repos/example/repo/git/ref/tags/build-example'):
+                    return json.dumps({'object': {'type': 'commit', 'sha': '1' * 40}})
                 if args[:5] == ('gh', 'api', '--method', 'POST', 'repos/example/repo/releases'):
                     request = json.loads(Path(args[-1]).read_text())
+                    # GitHub rejects an explicit historical workflow target even
+                    # though the already-existing tag is correct.
+                    if 'target_commitish' in request:
+                        raise RuntimeError('Resource not accessible by integration (HTTP 403)')
                     self.assertTrue(request['draft'])
                     self.assertEqual('glibc 2.44-r16', request['name'])
                     self.assertEqual('false', request['make_latest'])
