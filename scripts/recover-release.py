@@ -41,7 +41,8 @@ def main():
         tag = package + '/build-' + lock['build_id']
         ref = json.loads(subprocess.check_output(['gh', 'api', 'repos/' + os.environ['GITHUB_REPOSITORY'] + '/git/ref/tags/' + tag], text=True))
         if ref['object']['type'] != 'commit' or ref['object']['sha'] != sha:
-            raise ValueError('Release tag must point to the validated build commit')
+            raise ValueError(f"Release tag {tag} points to {ref['object']['type']} {ref['object']['sha']}; "
+                             f'expected validated build commit {sha}')
         print(tag + ': verified at ' + sha)
         return
     run, package = sys.argv[1:]
