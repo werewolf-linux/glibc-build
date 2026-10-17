@@ -233,7 +233,7 @@ jobs:
           GITHUB_SHA: ${{ steps.source.outputs.source_sha }}
           GITHUB_RUN_NUMBER: ${{ steps.source.outputs.source_run_number }}
         run: |
-          cp ../publisher/scripts/publish.py scripts/publish.py
+          cp ../publisher/scripts/publish.py ../publisher/scripts/packages.py scripts/
           python3 -m venv build/venv
           build/venv/bin/pip install -r requirements.txt
           mkdir -p "build/$PACKAGE/inputs"
