@@ -67,7 +67,7 @@ jobs:
     if: always() && !cancelled() && needs.discover.result == 'success'
     runs-on: ubuntu-26.04
     timeout-minutes: 60
-    environment: ${{ github.actor == 'tstromberg' && github.triggering_actor == 'tstromberg' && 'release-owner' || 'release' }}
+    environment: release
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -101,7 +101,7 @@ jobs:
         package: ${{ fromJSON(needs.discover.outputs.publish) }}
     runs-on: ubuntu-26.04
     timeout-minutes: 60
-    environment: ${{ github.actor == 'tstromberg' && github.triggering_actor == 'tstromberg' && 'release-owner' || 'release' }}
+    environment: release
     permissions:
       contents: write
       actions: read
