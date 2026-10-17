@@ -14,7 +14,7 @@ class ReleaseAssets(unittest.TestCase):
         self.current = {'id': 42, 'draft': True, 'tag_name': 'node/build-example',
             'upload_url': 'https://uploads.github.com/repos/test/runtime/releases/42/assets{?name,label}',
             'assets': [{'id': 77, 'name': 'node-aarch64.tar.gz'}]}
-        self.env = patch.dict(os.environ, {'GITHUB_REPOSITORY': 'test/runtime'})
+        self.env = patch.dict(os.environ, {'GITHUB_REPOSITORY': 'test/runtime', 'GITHUB_SHA': '1' * 40})
         self.env.start()
         self.addCleanup(self.env.stop)
 
@@ -42,3 +42,27 @@ class ReleaseAssets(unittest.TestCase):
                 with self.subTest(assets=assets), self.assertRaisesRegex(ValueError, 'Missing or duplicate'):
                     publish.download_asset({**self.current, 'assets': assets}, 'node-aarch64.tar.gz', Path('/tmp/unused'))
             run.assert_not_called()
+
+    def test_existing_tag_omits_the_unused_target_after_verifying_source(self):
+        ref = {'object': {'type': 'commit', 'sha': '1' * 40}}
+        with patch.object(publish, 'run', return_value=json.dumps(ref)) as run:
+            self.assertEqual(publish.release_target('node/build-example'), {})
+            run.assert_called_once_with('gh', 'api', 'repos/test/runtime/git/ref/tags/node/build-example')
+
+    def test_missing_tag_keeps_the_exact_build_commit(self):
+        missing = subprocess.CalledProcessError(1, ['gh', 'api'], output='{"status":"404"}')
+        with patch.object(publish, 'run', side_effect=missing):
+            self.assertEqual(publish.release_target('node/build-example'), {'target_commitish': '1' * 40})
+
+    def test_wrong_or_indirect_tag_fails_before_creating_a_release(self):
+        for kind, sha in [('commit', '2' * 40), ('tag', '1' * 40)]:
+            with self.subTest(kind=kind), patch.object(publish, 'run', return_value=json.dumps(
+                    {'object': {'type': kind, 'sha': sha}})) as run:
+                with self.assertRaisesRegex(ValueError, 'validated source'):
+                    publish.release_target('node/build-example')
+                self.assertEqual(run.call_count, 1)
+
+    def test_ref_access_failure_is_not_treated_as_a_missing_tag(self):
+        denied = subprocess.CalledProcessError(1, ['gh', 'api'], output='{"status":"403"}')
+        with patch.object(publish, 'run', side_effect=denied), self.assertRaises(subprocess.CalledProcessError):
+            publish.release_target('node/build-example')

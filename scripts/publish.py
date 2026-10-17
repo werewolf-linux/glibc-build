@@ -64,6 +64,22 @@ def release(tag):
         raise ValueError('Multiple releases use the same build tag')
     return matches[0] if matches else None
 
+def release_target(tag):
+    # target_commitish only creates a missing tag. For an existing tag, keep
+    # its verified source and omit this redundant field: GitHub otherwise
+    # checks historical workflow files against main and rejects Actions tokens.
+    source = os.environ['GITHUB_SHA']
+    try:
+        ref = json.loads(run('gh', 'api', 'repos/' + os.environ['GITHUB_REPOSITORY'] +
+                             '/git/ref/tags/' + tag))
+    except subprocess.CalledProcessError as error:
+        if json.loads(error.stdout or '{}').get('status') != '404':
+            raise
+        return {'target_commitish': source}
+    if ref['object']['type'] != 'commit' or ref['object']['sha'] != source:
+        raise ValueError('Release tag does not point to the validated source: ' + tag)
+    return {}
+
 def asset(current, name):
     matches = [a for a in current['assets'] if a['name'] == name]
     if len(matches) != 1:
@@ -337,7 +353,7 @@ def stage(pkg, artifacts, assets, lock, tag):
         request = Path(directory) / 'release.json'
         if current is None:
             body.update({'tag_name': tag, 'draft': True, 'make_latest': 'false',
-                         'target_commitish': os.environ['GITHUB_SHA'], 'name': pkg.title + ' ' + manifest['version']})
+                         'name': pkg.title + ' ' + manifest['version'], **release_target(tag)})
             request.write_text(json.dumps(body))
             current = json.loads(run('gh', 'api', '--method', 'POST',
                                      'repos/' + os.environ['GITHUB_REPOSITORY'] + '/releases',
