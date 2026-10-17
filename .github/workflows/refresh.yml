@@ -230,16 +230,17 @@ jobs:
       - name: Validate and stage the original signed artifacts with the repaired publisher
         working-directory: validated
         env:
-          GITHUB_SHA: ${{ steps.source.outputs.source_sha }}
-          GITHUB_RUN_NUMBER: ${{ steps.source.outputs.source_run_number }}
+          BUILD_SOURCE_SHA: ${{ steps.source.outputs.source_sha }}
+          BUILD_SOURCE_RUN_NUMBER: ${{ steps.source.outputs.source_run_number }}
         run: |
           cp ../publisher/scripts/publish.py ../publisher/scripts/packages.py scripts/
           python3 -m venv build/venv
           build/venv/bin/pip install -r requirements.txt
           mkdir -p "build/$PACKAGE/inputs"
           tar -xzf "build/input-bundle/$PACKAGE.tar.gz" -C "build/$PACKAGE/inputs"
-          build/venv/bin/python ../publisher/scripts/recover-release.py --verify-tag "$PACKAGE" "$GITHUB_SHA"
-          build/venv/bin/python scripts/publish.py stage "$PACKAGE"
+          build/venv/bin/python ../publisher/scripts/recover-release.py --verify-tag "$PACKAGE" "$BUILD_SOURCE_SHA"
+          GITHUB_SHA="$BUILD_SOURCE_SHA" GITHUB_RUN_NUMBER="$BUILD_SOURCE_RUN_NUMBER" GITHUB_RUN_ID="$RECOVER_RUN" \
+            build/venv/bin/python scripts/publish.py stage "$PACKAGE"
       - name: Write the production signing key for the stable index
         working-directory: validated
         env:
@@ -253,9 +254,10 @@ jobs:
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           AWS_EC2_METADATA_DISABLED: 'true'
-          GITHUB_SHA: ${{ steps.source.outputs.source_sha }}
-          GITHUB_RUN_NUMBER: ${{ steps.source.outputs.source_run_number }}
+          BUILD_SOURCE_SHA: ${{ steps.source.outputs.source_sha }}
+          BUILD_SOURCE_RUN_NUMBER: ${{ steps.source.outputs.source_run_number }}
         run: |
           test -n "$AWS_ACCESS_KEY_ID"
           test -n "$AWS_SECRET_ACCESS_KEY"
-          build/venv/bin/python scripts/publish.py publish "$PACKAGE"
+          GITHUB_SHA="$BUILD_SOURCE_SHA" GITHUB_RUN_NUMBER="$BUILD_SOURCE_RUN_NUMBER" GITHUB_RUN_ID="$RECOVER_RUN" \
+            build/venv/bin/python scripts/publish.py publish "$PACKAGE"
