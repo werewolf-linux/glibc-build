@@ -233,7 +233,7 @@ jobs:
           BUILD_SOURCE_SHA: ${{ steps.source.outputs.source_sha }}
           BUILD_SOURCE_RUN_NUMBER: ${{ steps.source.outputs.source_run_number }}
         run: |
-          cp ../publisher/scripts/publish.py ../publisher/scripts/packages.py scripts/
+          cp ../publisher/scripts/publish.py scripts/publish.py
           python3 -m venv build/venv
           build/venv/bin/pip install -r requirements.txt
           mkdir -p "build/$PACKAGE/inputs"

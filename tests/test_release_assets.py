@@ -42,3 +42,22 @@ class ReleaseAssets(unittest.TestCase):
                 with self.subTest(assets=assets), self.assertRaisesRegex(ValueError, 'Missing or duplicate'):
                     publish.download_asset({**self.current, 'assets': assets}, 'node-aarch64.tar.gz', Path('/tmp/unused'))
             run.assert_not_called()
+
+class LegacyBuildHelpers(unittest.TestCase):
+    def test_recovery_supports_locked_helpers_without_output_names(self):
+        from types import SimpleNamespace
+        config = {'package': {'name': 'example', 'version': '1.2'},
+            'data': [{'name': 'languages', 'items': {'en': 'English', 'de': 'German'}}],
+            'subpackages': [{'name': '${{package.name}}-dev'},
+                {'name': '${{package.name}}-${{range.key}}-${{package.version}}', 'range': 'languages'}]}
+        expected = {'example', 'example-dev', 'example-en-1.2', 'example-de-1.2'}
+        self.assertEqual(publish.package_names(config), expected)
+        with patch.object(publish, 'packages', SimpleNamespace()):
+            self.assertEqual(publish.package_names(config), expected)
+
+    def test_legacy_helpers_keep_conditional_package_review(self):
+        from types import SimpleNamespace
+        config = {'package': {'name': 'example', 'version': '1'},
+            'subpackages': [{'name': 'optional', 'if': '${{build.arch}} == aarch64'}]}
+        with patch.object(publish, 'packages', SimpleNamespace()), self.assertRaisesRegex(ValueError, 'conditional'):
+            publish.package_names(config)
