@@ -33,10 +33,10 @@ jobs:
       matrix:
         include:
           - arch: x86_64
-            runner: ubuntu-26.04
+            runner: ${{ vars.WEREWOLF_X86_64_BUILD_RUNNER || '["ubuntu-26.04"]' }}
           - arch: aarch64
-            runner: ubuntu-26.04-arm
-    runs-on: ${{ matrix.runner }}
+            runner: ${{ vars.WEREWOLF_ARM64_BUILD_RUNNER || '["ubuntu-26.04-arm"]' }}
+    runs-on: ${{ fromJSON(matrix.runner) }}
     environment: ${{ inputs.production && 'release' || 'ci' }}
     timeout-minutes: 300
     env:
@@ -47,6 +47,17 @@ jobs:
           persist-credentials: false
       - name: Name a package this repository builds
         run: test -f "packages/$PACKAGE/package.py"
+      - name: Check native runner architecture and resources
+        env:
+          EXPECTED_ARCH: ${{ matrix.arch }}
+        run: |
+          case "$EXPECTED_ARCH:$(uname -m)" in
+            x86_64:x86_64|aarch64:aarch64) ;;
+            *) echo 'Runner architecture does not match the package build'; exit 1 ;;
+          esac
+          echo "Runner: $RUNNER_NAME"
+          echo "Available CPUs: $(nproc)"
+          free -h
       - name: Install build tools
         run: |
           sudo apt-get -o Acquire::Retries=3 update
@@ -62,7 +73,8 @@ jobs:
             sudo journalctl -k --since '2 minutes ago' --no-pager
             exit 1
           fi
-          sudo /usr/bin/bwrap --ro-bind / / --dev /dev --proc /proc --unshare-pid \
+          if [ -f "$PWD/build/tools/bwrap.apparmor" ]; then
+            sudo /usr/bin/bwrap --ro-bind / / --dev /dev --proc /proc --unshare-pid \
               --cap-add CAP_SYS_CHROOT -- /usr/bin/python3 -c '
           import errno, os
           try:
@@ -74,6 +86,7 @@ jobs:
           else:
               raise RuntimeError("system bubblewrap unexpectedly permits chroot")
           '
+          fi
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         if: inputs.inputs_artifact != ''
         with:
@@ -122,3 +135,9 @@ jobs:
             build/${{ inputs.package }}/inputs/upstream.lock.json
             build/${{ inputs.package }}/${{ inputs.package }}.yaml
           if-no-files-found: warn
+      - name: Restore build ownership for the next checkout
+        if: always()
+        run: |
+          if [ -d build ]; then
+            sudo chown -R "$USER" build
+          fi

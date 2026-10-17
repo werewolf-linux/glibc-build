@@ -43,10 +43,13 @@ def main():
     if os.geteuid() != 0:
         raise ValueError('Load the CI runner profile as root')
     executable = ROOT / 'build/tools/bwrap'
-    policy = profile(PROFILE.read_text(), executable)
+    policy = profile(PROFILE.read_text(), executable) if PROFILE.is_file() else None
     executable.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile('/usr/bin/bwrap', executable)
     executable.chmod(0o755)
+    if policy is None:
+        print('setup-runner: no Ubuntu bubblewrap child profile; using system confinement')
+        return
     target = executable.with_suffix('.apparmor')
     target.write_text(policy)
     subprocess.run(['/usr/sbin/apparmor_parser', '--replace', str(target)], check=True, timeout=30)

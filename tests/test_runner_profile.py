@@ -1,6 +1,8 @@
 import importlib.util
 from pathlib import Path
+import tempfile
 import unittest
+from unittest import mock
 
 SCRIPT = Path(__file__).resolve().parents[1] / 'scripts/setup-runner.py'
 spec = importlib.util.spec_from_file_location('runner_setup', SCRIPT)
@@ -24,6 +26,22 @@ profile unpriv_bwrap flags=(attach_disconnected,mediate_deleted) {
 
 
 class RunnerProfile(unittest.TestCase):
+    def test_runner_without_ubuntu_profile_keeps_system_confinement(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            executable = root / 'build/tools/bwrap'
+            with mock.patch.object(runner_setup, 'ROOT', root), \
+                 mock.patch.object(runner_setup, 'PROFILE', root / 'missing-profile'), \
+                 mock.patch.object(runner_setup.os, 'geteuid', return_value=0), \
+                 mock.patch.object(runner_setup.shutil, 'copyfile',
+                                   side_effect=lambda source, target: target.write_bytes(b'runner')) as copy, \
+                 mock.patch.object(runner_setup.subprocess, 'run') as run:
+                runner_setup.main()
+            copy.assert_called_once_with('/usr/bin/bwrap', executable)
+            self.assertEqual(0o755, executable.stat().st_mode & 0o777)
+            self.assertFalse(executable.with_suffix('.apparmor').exists())
+            run.assert_not_called()
+
     def test_capability_is_scoped_to_the_private_runner_child(self):
         executable = Path('/home/runner/work/project/build/tools/bwrap')
         result = runner_setup.profile(TEMPLATE, executable)

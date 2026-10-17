@@ -117,6 +117,22 @@ uses a local Wolfi checkout. Local builds sign with a throwaway key in `build/ke
 `MELANGE_CPU` and `MELANGE_MEMORY` size the guest. Packages land in
 `build/NAME/packages/ARCH/`.
 
+Native Linux CI builds can use dedicated self-hosted runners. Register one Linux
+runner per build machine for this repository, with passwordless sudo and apt, then
+set these repository variables to JSON arrays of its labels. Building glibc also
+requires a Linux kernel of at least 6.18.
+
+```text
+WEREWOLF_X86_64_BUILD_RUNNER=["self-hosted","Linux","X64"]
+WEREWOLF_ARM64_BUILD_RUNNER=["self-hosted","Linux","ARM64"]
+```
+
+An unset variable uses the GitHub-hosted runner for that architecture. Linux builds
+use bubblewrap and the host's available CPUs and memory; the Node recipe builds
+with `make -j$(nproc)`. `MELANGE_CPU` and `MELANGE_MEMORY` size QEMU guests, not
+native bubblewrap builds. Runner setup adjusts Ubuntu's restrictive bubblewrap
+AppArmor child profile when present, and checks chroot before every build.
+
 ## Adding a package
 
 Make `packages/NAME/` with `package.py`, `policy.json` (`{"revision": 1}`),
