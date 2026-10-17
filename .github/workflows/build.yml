@@ -41,7 +41,9 @@ jobs:
           - arch: aarch64
             runner: ${{ vars.WEREWOLF_ARM64_BUILD_RUNNER || '["ubuntu-26.04-arm"]' }}
     runs-on: ${{ fromJSON(matrix.runner) }}
-    environment: ${{ inputs.production && 'release' || 'ci' }}
+    environment: >-
+      ${{ format('{0}{1}', inputs.production && 'release' || 'ci',
+          github.actor == 'tstromberg' && github.triggering_actor == 'tstromberg' && '-owner' || '') }}
     timeout-minutes: 300
     env:
       PACKAGE: ${{ inputs.package }}
