@@ -25,6 +25,10 @@ permissions:
   contents: read
 jobs:
   build:
+    if: >-
+      github.repository == 'werewolf-linux/hardened-packages' &&
+      github.ref == 'refs/heads/main' &&
+      contains(fromJSON('["push","schedule","workflow_dispatch"]'), github.event_name)
     concurrency:
       group: native-build-${{ github.event_name }}-${{ github.ref }}-${{ inputs.package }}-${{ matrix.arch }}
       cancel-in-progress: false
@@ -60,21 +64,29 @@ jobs:
           free -h
       - name: Install build tools
         run: |
-          sudo apt-get -o Acquire::Retries=3 update
-          sudo apt-get -o Acquire::Retries=3 install -y bubblewrap python3-venv git make openssl patch
+          if [ "$RUNNER_ENVIRONMENT" = github-hosted ]; then
+            sudo -n apt-get -o Acquire::Retries=3 update
+            sudo -n apt-get -o Acquire::Retries=3 install -y bubblewrap python3-venv git make openssl patch
+          else
+            for tool in bwrap python3 git make openssl patch unshare newuidmap newgidmap; do
+              command -v "$tool" >/dev/null || {
+                echo "Install $tool on the self-hosted runner before building" >&2
+                exit 1
+              }
+            done
+          fi
           python3 -m venv build/venv
           build/venv/bin/pip install -r requirements.txt
           python3 scripts/install-melange.py --dest build/tools/melange
-          sudo python3 scripts/setup-runner.py
+          scripts/ci-root python3 scripts/setup-runner.py
       - name: Check sandbox chroot before building
         run: |
-          if ! sudo "$PWD/build/tools/bwrap" --ro-bind / / --dev /dev --proc /proc --unshare-pid \
+          if ! scripts/ci-root "$PWD/build/tools/bwrap" --ro-bind / / --dev /dev --proc /proc --unshare-pid \
               --cap-add CAP_SYS_CHROOT -- /usr/bin/python3 -c 'import os; os.chroot("/")'; then
-            sudo journalctl -k --since '2 minutes ago' --no-pager
             exit 1
           fi
           if [ -f "$PWD/build/tools/bwrap.apparmor" ]; then
-            sudo /usr/bin/bwrap --ro-bind / / --dev /dev --proc /proc --unshare-pid \
+            scripts/ci-root /usr/bin/bwrap --ro-bind / / --dev /dev --proc /proc --unshare-pid \
               --cap-add CAP_SYS_CHROOT -- /usr/bin/python3 -c '
           import errno, os
           try:
@@ -114,11 +126,13 @@ jobs:
       - name: Build and test signed packages
         run: |
           set -o pipefail
-          sudo env PATH="$PWD/build/tools:$PATH" make PYTHON=build/venv/bin/python PACKAGE="$PACKAGE" \
+          scripts/ci-root env PATH="$PWD/build/tools:$PATH" make PYTHON=build/venv/bin/python PACKAGE="$PACKAGE" \
             ARCH=${{ matrix.arch }} build 2>&1 | tee build/build.log
       - name: Record successful native validation
         run: |
-          sudo chown -R "$USER" "build/$PACKAGE/packages"
+          if [ "$RUNNER_ENVIRONMENT" = github-hosted ]; then
+            scripts/ci-root chown -R "$(id -u):$(id -g)" "build/$PACKAGE/packages"
+          fi
           build/venv/bin/python scripts/provenance.py "$PACKAGE" --arch ${{ matrix.arch }}
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
@@ -139,5 +153,9 @@ jobs:
         if: always()
         run: |
           if [ -d build ]; then
-            sudo chown -R "$USER" build
+            owner=0:0
+            if [ "$RUNNER_ENVIRONMENT" = github-hosted ]; then
+              owner="$(id -u):$(id -g)"
+            fi
+            scripts/ci-root chown -R "$owner" build
           fi
