@@ -133,7 +133,23 @@ def authenticated(path, key):
             '-signature', str(signature_path), str(control))
     return parts
 
-package_names = packages.output_names
+def package_names(config):
+    # Keep publication independent of new APIs in the authenticated builder:
+    # recovery replaces this file alone in the original source snapshot.
+    def expand(name):
+        return name.replace('${{package.name}}', config['package']['name']).replace(
+            '${{package.version}}', str(config['package']['version']))
+    names = {config['package']['name']}
+    ranges = {item['name']: item['items'] for item in config.get('data', [])}
+    for sub in config['subpackages']:
+        if sub.get('if'):
+            raise ValueError('Review conditional package publication before updating')
+        for key in ranges[sub['range']] if 'range' in sub else ['']:
+            name = expand(sub['name']).replace('${{range.key}}', key)
+            if '${{' in name:
+                raise ValueError('Unresolved package name: ' + name)
+            names.add(name)
+    return names
 
 def validate(pkg, directory, arch, lock, source_sha=None):
     record = json.loads((directory / 'build.json').read_text())
