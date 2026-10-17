@@ -11,7 +11,7 @@ class Recovery(unittest.TestCase):
     def setUp(self):
         self.record = {'id': 123, 'repository': {'full_name': 'test/runtime'},
             'head_repository': {'full_name': 'test/runtime'}, 'path': '.github/workflows/refresh.yml',
-            'head_sha': 'a' * 40, 'run_number': 456}
+            'head_sha': 'a' * 40, 'head_branch': 'main', 'event': 'push', 'run_number': 456}
         self.jobs = [{'name': f'build (node) / build ({arch}, ubuntu-26.04)', 'conclusion': 'success'}
             for arch in ('x86_64', 'aarch64')]
         env = patch.dict(os.environ, {'GITHUB_REPOSITORY': 'test/runtime'})
@@ -28,6 +28,7 @@ class Recovery(unittest.TestCase):
 
     def test_other_workflow_fork_run_or_source_is_rejected(self):
         for field, value in (('id', 124), ('head_repository', {'full_name': 'fork/runtime'}),
-                ('path', '.github/workflows/build.yml'), ('head_sha', 'main')):
+                ('path', '.github/workflows/build.yml'), ('head_sha', 'main'),
+                ('head_branch', 'feature'), ('event', 'pull_request')):
             with self.subTest(field=field), self.assertRaises(ValueError):
                 recovery.checked_run('123', 'node', dict(self.record, **{field: value}), self.jobs)

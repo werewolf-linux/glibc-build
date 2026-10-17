@@ -14,6 +14,8 @@ def checked_run(run, package, record, jobs):
         raise ValueError('Expected a numeric source workflow run')
     if (str(record['id']) != run or record['repository']['full_name'] != repo or
             record['head_repository']['full_name'] != repo or
+            record['head_branch'] != 'main' or
+            record['event'] not in ('push', 'schedule', 'workflow_dispatch') or
             record['path'] != '.github/workflows/refresh.yml' or
             not re.fullmatch(r'[0-9a-f]{40}', record['head_sha'])):
         raise ValueError('Source run is not this repository\'s runtime publication workflow')
